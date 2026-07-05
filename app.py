@@ -31,7 +31,7 @@ import zipfile
 import base64
 import tempfile
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from functools import wraps
 
@@ -152,7 +152,12 @@ TRANSLATIONS = {
         "País": "Country", "Editar planta": "Edit site", "separadas por coma": "comma-separated",
         "Áreas / zonas de la planta": "Site areas / zones", "Catálogo de posibilidades": "Catalog of possibilities",
         "Gestionar catálogo": "Manage catalog", "Agregar al catálogo": "Add to catalog",
-        "Volver": "Back",
+        "Volver": "Back", "Planta": "Site",
+        "Cronograma de Seguimiento": "Follow-up Schedule", "Filtros": "Filters",
+        "Fecha desde": "Date from", "Fecha hasta": "Date to", "Rango rápido": "Quick range",
+        "Todo": "All", "Aplicar": "Apply", "Gantt semanal": "Weekly Gantt",
+        "Área": "Area", "Hallazgo": "Finding", "Semana actual": "Current week",
+        "Todas": "All", "Cronograma": "Schedule",
     }
 }
 
@@ -291,6 +296,105 @@ TEMPLATES = {
   </div>
 {% endblock %}
 """,
+    'cronograma.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('plantas_list') }}" class="sidebar-btn">← {{ tr("Volver a plantas") }}</a>
+{% endblock %}
+
+{% block content %}
+  <h2>{{ tr("Cronograma de Seguimiento") }}</h2>
+
+  <div class="chart-card" style="margin-bottom:16px;">
+    <h3>{{ tr("Filtros") }}</h3>
+    <form method="get" id="cron-form">
+      <div class="filters-bar" style="margin-bottom:10px;">
+        <select name="pais">
+          <option value="">{{ tr("País") }}: {{ tr("Todos") }}</option>
+          {% for pa in paises %}<option value="{{ pa }}" {{ 'selected' if pais_f==pa }}>{{ pa }}</option>{% endfor %}
+        </select>
+        <select name="estado">
+          <option value="">{{ tr("Estado") }}: {{ tr("Todos") }}</option>
+          {% for s in FINDING_STATUSES %}<option value="{{ s }}" {{ 'selected' if estado_f==s }}>{{ tr(s) }}</option>{% endfor %}
+        </select>
+        <select name="fase">
+          <option value="">{{ tr("Fase") }}: {{ tr("Todas") }}</option>
+          {% for f in FASES %}<option value="{{ f }}" {{ 'selected' if fase_f==f }}>{{ f }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="filters-bar">
+        <span class="muted" style="font-size:12px;">{{ tr("Fecha desde") }}</span>
+        <input type="date" name="date_from" id="cron-from" value="{{ date_from }}">
+        <span class="muted" style="font-size:12px;">{{ tr("Fecha hasta") }}</span>
+        <input type="date" name="date_to" id="cron-to" value="{{ date_to }}">
+        <span class="muted" style="font-size:12px;">{{ tr("Rango rápido") }}</span>
+        <button type="button" class="btn-icon-text" data-days="7">7d</button>
+        <button type="button" class="btn-icon-text" data-days="30">30d</button>
+        <button type="button" class="btn-icon-text" data-days="90">90d</button>
+        <button type="button" class="btn-icon-text" data-days="0">{{ tr("Todo") }}</button>
+        <button type="submit" class="btn-primary">▶ {{ tr("Aplicar") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="chart-card">
+    <h3>{{ tr("Gantt semanal") }}</h3>
+    <div class="table-wrap">
+      <table class="data-table gantt-table">
+        <thead>
+          <tr>
+            <th style="min-width:260px;">{{ tr("Área") }} / {{ tr("Hallazgo") }}</th>
+            {% for w in weeks %}<th class="{{ 'gantt-current' if w.is_current else '' }}">{{ w.label }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="gantt-row-label" style="border-left:5px solid {{ FASE_COLOR.get(r.pillar, NGR) }};">
+              [{{ r.area }}] {{ r.description }}
+              <div class="muted" style="font-size:10px;">{{ r.pais }} · {{ r.planta_name }}</div>
+            </td>
+            {% for w in weeks %}
+            <td class="{{ 'gantt-current' if w.is_current else '' }}">
+              {% if loop.index0 == r.week_idx %}
+              <span class="gantt-h {{ 'gantt-h-cerrado' if r.status=='Cerrado' else 'gantt-h-abierto' }}">H</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+          {% if not rows %}
+          <tr><td colspan="{{ weeks|length + 1 }}" class="muted-note">Sin hallazgos en el rango seleccionado.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    <div class="gantt-legend">
+      <span><span class="gantt-h gantt-h-abierto">H</span> {{ tr("Abierto") }}</span>
+      <span><span class="gantt-h gantt-h-cerrado">H</span> {{ tr("Cerrado") }}</span>
+      <span><span class="gantt-current-swatch"></span> {{ tr("Semana actual") }}</span>
+    </div>
+  </div>
+
+<script>
+document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var days = parseInt(btn.dataset.days, 10);
+    var to = new Date();
+    var toStr = to.toISOString().slice(0,10);
+    document.getElementById('cron-to').value = toStr;
+    if (days === 0) {
+      document.getElementById('cron-from').value = '2020-01-01';
+    } else {
+      var from = new Date();
+      from.setDate(from.getDate() - days);
+      document.getElementById('cron-from').value = from.toISOString().slice(0,10);
+    }
+    document.getElementById('cron-form').submit();
+  });
+});
+</script>
+{% endblock %}
+""",
     'catalogo.html': """{% extends "base.html" %}
 {% block sidebar %}
   {% if pid %}
@@ -391,6 +495,9 @@ TEMPLATES = {
 <a href="{{ url_for('planta_hallazgos', pid=p.id) }}" class="sidebar-btn {{ 'active' if active=='Hallazgos' else '' }}">
 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none"/></svg>
 {{ tr("Hallazgos") }}</a>
+<a href="{{ url_for('cronograma_view') }}" class="sidebar-btn">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+{{ tr("Cronograma") }}</a>
 <a href="{{ url_for('planta_evidencia', pid=p.id) }}" class="sidebar-btn {{ 'active' if active=='Evidencias' else '' }}">
 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-2h6l2 2h3v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V8z"/><circle cx="12" cy="13" r="3.5"/></svg>
 {{ tr("Evidencias") }}</a>
@@ -430,6 +537,13 @@ Usuarios</a>
     {{ tr(a) }}
   </a>
   {% endfor %}
+  <div class="sidebar-label">General</div>
+  <a href="{{ url_for('cronograma_view') }}" class="sidebar-btn">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+  {{ tr("Cronograma") }}</a>
+  <a href="{{ url_for('catalogo_view') }}" class="sidebar-btn">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13a2 2 0 0 1 2 2v14l-3-2-3 2-3-2-3 2-3-2-3 2V6a2 2 0 0 1 2-2z"/></svg>
+  {{ tr("Catálogo de posibilidades") }}</a>
   {% if current_user and current_user.role == "admin" %}
   <div class="sidebar-label">Administración</div>
   <a href="{{ url_for('admin_users') }}" class="sidebar-btn">
@@ -770,7 +884,7 @@ Usuarios</a>
       <thead>
         <tr>
           <th><input type="checkbox" id="select-all"></th>
-          <th>#</th><th>{{ tr("Fecha") }}</th><th>{{ tr("Zona / Área") }}</th><th>{{ tr("Pilar") }}</th>
+          <th>#</th><th>{{ tr("Fecha") }}</th><th>{{ tr("País") }}</th><th>{{ tr("Planta") }}</th><th>{{ tr("Zona / Área") }}</th><th>{{ tr("Pilar") }}</th>
           <th>{{ tr("Descripción") }}</th><th>{{ tr("Severidad") }}</th><th>{{ tr("Acción correctiva") }}</th>
           <th>{{ tr("Responsable") }}</th><th>{{ tr("Fecha compromiso") }}</th><th>{{ tr("Estado") }}</th>
           <th>{{ tr("Acciones") }}</th>
@@ -784,6 +898,8 @@ Usuarios</a>
           <td><input type="checkbox" class="row-select" value="{{ loop.index0 }}"></td>
           <td class="muted">{{ loop.index }}</td>
           <td>{{ h.get('date','') }}</td>
+          <td>{{ p.get('pais','—') }}</td>
+          <td>{{ p.get('name','') }}</td>
           <td>{{ h.get('area','') }}</td>
           <td>{{ h.get('pillar','') }}</td>
           <td>{{ h.get('description','') }}</td>
@@ -916,9 +1032,14 @@ Usuarios</a>
         </div>
         <div>
           <label>{{ tr("Fase 5S") }}</label>
-          <select name="pillar" id="hz-fase">
-            {% for f in FASES %}<option value="{{ f }}" {{ 'selected' if old.get('pillar')==f }}>{{ f }}</option>{% endfor %}
-          </select>
+          <div class="fase-btns" id="hz-fase-btns">
+            {% for f in FASES %}
+            <label class="fase-btn" style="--fase-color:{{ FASE_COLOR.get(f, NB) }};">
+              <input type="radio" name="pillar" value="{{ f }}" {{ 'checked' if old.get('pillar')==f or (not old.get('pillar') and loop.first) else '' }}>
+              {{ FASE_KEYS.get(f, f) }}
+            </label>
+            {% endfor %}
+          </div>
         </div>
       </div>
 
@@ -972,12 +1093,22 @@ Usuarios</a>
 <script>
 (function(){
   var CATALOGO = {{ catalogo|tojson }};
-  var faseSel = document.getElementById('hz-fase');
+  var faseBtnsContainer = document.getElementById('hz-fase-btns');
+  var faseRadios = faseBtnsContainer.querySelectorAll('input[type=radio]');
   var catSel = document.getElementById('hz-catalogo');
   var descTa = document.getElementById('hz-desc');
 
+  function getSelectedFase(){
+    var checked = faseBtnsContainer.querySelector('input:checked');
+    return checked ? checked.value : '';
+  }
+  function refreshFaseButtons(){
+    faseRadios.forEach(function(r){
+      r.closest('.fase-btn').classList.toggle('fase-selected', r.checked);
+    });
+  }
   function refreshCatalogo(){
-    var fase = faseSel.value;
+    var fase = getSelectedFase();
     catSel.innerHTML = '<option value="">Selecciona...</option>';
     CATALOGO.filter(function(c){ return c.fase === fase; }).forEach(function(c){
       var opt = document.createElement('option');
@@ -986,10 +1117,13 @@ Usuarios</a>
       catSel.appendChild(opt);
     });
   }
-  faseSel.addEventListener('change', refreshCatalogo);
+  faseRadios.forEach(function(r){
+    r.addEventListener('change', function(){ refreshFaseButtons(); refreshCatalogo(); });
+  });
   catSel.addEventListener('change', function(){
     if (catSel.value) descTa.value = catSel.value;
   });
+  refreshFaseButtons();
   refreshCatalogo();
 })();
 </script>
@@ -1422,6 +1556,29 @@ a{text-decoration:none;color:inherit;}
 .chk-no{color:var(--red);}
 .chk-no:has(input:checked), .chk-no.chk-selected{background:var(--red);color:#fff;border-color:var(--red);}
 
+.fase-btns{display:flex;gap:6px;flex-wrap:wrap;}
+.fase-btn{display:flex;align-items:center;gap:0;font-size:12px;font-weight:700;
+  padding:8px 12px;border-radius:6px;cursor:pointer;border:2px solid var(--fase-color);
+  color:var(--fase-color);background:#fff;}
+.fase-btn input{position:absolute;opacity:0;width:0;height:0;}
+.fase-btn:has(input:checked), .fase-btn.fase-selected{background:var(--fase-color);color:#fff;}
+
+.gantt-table{min-width:100%;}
+.gantt-table th{text-align:center;min-width:44px;}
+.gantt-table td{text-align:center;padding:6px 4px;}
+.gantt-row-label{text-align:left !important;font-size:12px;padding-left:10px !important;white-space:normal;}
+.gantt-current{background:#EAF1FA;}
+.gantt-h{display:inline-block;width:22px;height:22px;line-height:22px;border-radius:5px;
+  font-size:11px;font-weight:700;color:#fff;}
+.gantt-h-abierto{background:var(--red);}
+.gantt-h-cerrado{background:var(--green);}
+.gantt-legend{display:flex;gap:18px;margin-top:12px;font-size:12px;color:var(--muted);align-items:center;}
+.gantt-legend span{display:flex;align-items:center;gap:6px;}
+.gantt-current-swatch{display:inline-block;width:14px;height:14px;border-radius:3px;background:#EAF1FA;
+  border:1px solid var(--blue);}
+.btn-icon-text{border:1px solid var(--border);background:#fff;border-radius:6px;padding:6px 12px;
+  font-size:12px;cursor:pointer;color:var(--text);}
+
 .two-col{display:grid;grid-template-columns:1fr;gap:14px;}
 .three-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px;}
 .chart-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;}
@@ -1778,6 +1935,21 @@ def touch_and_save(plantas, p):
         if pr["id"] == p["id"]:
             plantas[i] = p
     save_plantas(plantas)
+
+
+def all_hallazgos_flat():
+    """Aplana los hallazgos de todas las plantas en una sola lista, con
+    pais/planta/planta_id agregados, para el Cronograma global."""
+    out = []
+    for p in load_plantas():
+        for idx, h in enumerate(p.get("hallazgos", [])):
+            item = dict(h)
+            item["planta_id"] = p["id"]
+            item["planta_name"] = p.get("name", "")
+            item["pais"] = p.get("pais", "")
+            item["_idx"] = idx
+            out.append(item)
+    return out
 
 
 def new_planta(name, site, customer, owner, problem, area="Logística", pais="", areas=None):
@@ -2144,6 +2316,86 @@ def hallazgos_bulk_delete(pid):
 
 
 # ── Catálogo global de posibilidades (compartido entre todas las plantas) ──
+@app.route("/cronograma")
+@login_required
+def cronograma_view():
+    hallazgos = all_hallazgos_flat()
+
+    paises = sorted({h.get("pais", "") for h in hallazgos if h.get("pais")})
+
+    pais_f = request.args.get("pais", "")
+    estado_f = request.args.get("estado", "")
+    fase_f = request.args.get("fase", "")
+    hoy = date.today()
+    date_from_s = request.args.get("date_from", "") or (hoy - timedelta(days=28)).isoformat()
+    date_to_s = request.args.get("date_to", "") or hoy.isoformat()
+
+    try:
+        date_from = datetime.strptime(date_from_s, "%Y-%m-%d").date()
+    except Exception:
+        date_from = hoy - timedelta(days=28)
+    try:
+        date_to = datetime.strptime(date_to_s, "%Y-%m-%d").date()
+    except Exception:
+        date_to = hoy
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+
+    filtered = []
+    for h in hallazgos:
+        if pais_f and h.get("pais") != pais_f:
+            continue
+        if estado_f and h.get("status") != estado_f:
+            continue
+        if fase_f and h.get("pillar") != fase_f:
+            continue
+        h_date_s = h.get("date", "")
+        try:
+            h_date = datetime.strptime(h_date_s, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if h_date < date_from or h_date > date_to:
+            continue
+        filtered.append((h, h_date))
+
+    # Semanas ISO en el rango, con etiqueta "S<numero>"
+    weeks = []
+    cur = date_from - timedelta(days=date_from.weekday())  # lunes de esa semana
+    end_monday = date_to - timedelta(days=date_to.weekday())
+    hoy_monday = hoy - timedelta(days=hoy.weekday())
+    while cur <= end_monday:
+        iso_week = cur.isocalendar()[1]
+        weeks.append({
+            "label": f"S{iso_week}",
+            "start": cur, "end": cur + timedelta(days=6),
+            "is_current": cur == hoy_monday,
+        })
+        cur += timedelta(days=7)
+    if not weeks:
+        iso_week = hoy_monday.isocalendar()[1]
+        weeks = [{"label": f"S{iso_week}", "start": hoy_monday, "end": hoy_monday, "is_current": True}]
+
+    rows = []
+    for h, h_date in filtered:
+        week_idx = None
+        for i, w in enumerate(weeks):
+            if w["start"] <= h_date <= w["end"]:
+                week_idx = i
+                break
+        rows.append({
+            "area": h.get("area", ""), "description": h.get("description", ""),
+            "status": h.get("status", "Abierto"), "pillar": h.get("pillar", ""),
+            "planta_name": h.get("planta_name", ""), "pais": h.get("pais", ""),
+            "week_idx": week_idx,
+        })
+
+    return render_template(
+        "cronograma.html", weeks=weeks, rows=rows, paises=paises,
+        pais_f=pais_f, estado_f=estado_f, fase_f=fase_f,
+        date_from=date_from.isoformat(), date_to=date_to.isoformat(),
+    )
+
+
 @app.route("/catalogo")
 @login_required
 def catalogo_view():

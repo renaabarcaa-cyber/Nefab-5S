@@ -57,9 +57,59 @@ PILLAR_LABELS = {
     "Seiri": "Seiri (Clasificar)", "Seiton": "Seiton (Ordenar)", "Seiso": "Seiso (Limpiar)",
     "Seiketsu": "Seiketsu (Estandarizar)", "Shitsuke": "Shitsuke (Disciplina)",
 }
+FASES = ["🔴 Seiri", "🟠 Seiton", "🟡 Seiso", "🟢 Seiketsu", "🔵 Shitsuke"]
+FASE_KEYS = {"🔴 Seiri": "Seiri", "🟠 Seiton": "Seiton", "🟡 Seiso": "Seiso",
+             "🟢 Seiketsu": "Seiketsu", "🔵 Shitsuke": "Shitsuke"}
+FASE_COLOR = {"🔴 Seiri": "#E53935", "🟠 Seiton": "#FE8200", "🟡 Seiso": "#FDD835",
+              "🟢 Seiketsu": "#8CC24A", "🔵 Shitsuke": "#144E8C"}
+
+# Checklist fijo de la auditoria: 10 preguntas, 2 por cada fase (mismo orden
+# y agrupacion que la app de escritorio: indices 0-1=Seiri, 2-3=Seiton, etc.)
+PREGUNTAS = [
+    ("🔴 Seiri", "¿Solo tiene lo que usa?"),
+    ("🔴 Seiri", "¿Es de fácil acceso?"),
+    ("🟠 Seiton", "¿Los elementos están identificados?"),
+    ("🟠 Seiton", "¿Todo está en el lugar correcto?"),
+    ("🟡 Seiso", "¿El lugar está limpio?"),
+    ("🟡 Seiso", "¿Los depósitos de basura contienen el tipo correcto?"),
+    ("🟢 Seiketsu", "¿Organización general según la norma?"),
+    ("🟢 Seiketsu", "¿Se usan y actualizan los tableros de anuncios?"),
+    ("🔵 Shitsuke", "¿Se mantiene capacitación frecuente de 5S?"),
+    ("🔵 Shitsuke", "¿Las 5S se implementan y se siguen?"),
+]
+FASES_MAP_IDX = {"Seiri": [0, 1], "Seiton": [2, 3], "Seiso": [4, 5], "Seiketsu": [6, 7], "Shitsuke": [8, 9]}
+
+DEFAULT_CATALOGO = [
+    {"fase": "🔴 Seiri", "descripcion": "Herramientas o materiales innecesarios en el área"},
+    {"fase": "🔴 Seiri", "descripcion": "Documentación antigua o desactualizada no eliminada"},
+    {"fase": "🔴 Seiri", "descripcion": "Equipos obsoletos almacenados sin motivo"},
+    {"fase": "🔴 Seiri", "descripcion": "Mezcla de materiales útiles con desechos"},
+    {"fase": "🔴 Seiri", "descripcion": "Falta identificación de lo que se debe descartar"},
+    {"fase": "🟠 Seiton", "descripcion": "Herramientas sin lugar definido o mal ubicadas"},
+    {"fase": "🟠 Seiton", "descripcion": "Falta señalización en estanterías y cajones"},
+    {"fase": "🟠 Seiton", "descripcion": "Mala organización de cables y utensilios"},
+    {"fase": "🟠 Seiton", "descripcion": "Dificultad para acceder a elementos frecuentes"},
+    {"fase": "🟠 Seiton", "descripcion": "Áreas de almacenamiento sobrecargadas"},
+    {"fase": "🟡 Seiso", "descripcion": "Suciedad visible en maquinaria, pisos o superficies"},
+    {"fase": "🟡 Seiso", "descripcion": "Fugas de aceite, grasa o residuos sin atender"},
+    {"fase": "🟡 Seiso", "descripcion": "Equipos con polvo acumulado o manchas"},
+    {"fase": "🟡 Seiso", "descripcion": "Áreas de difícil acceso sin limpieza regular"},
+    {"fase": "🟡 Seiso", "descripcion": "Falta cronograma o responsables de limpieza"},
+    {"fase": "🟢 Seiketsu", "descripcion": "Ausencia de procedimientos visuales o instructivos"},
+    {"fase": "🟢 Seiketsu", "descripcion": "Falta consistencia entre turnos"},
+    {"fase": "🟢 Seiketsu", "descripcion": "Etiquetado inconsistente o incompleto"},
+    {"fase": "🟢 Seiketsu", "descripcion": "Señalética confusa o deteriorada"},
+    {"fase": "🟢 Seiketsu", "descripcion": "No uso de formatos estandarizados"},
+    {"fase": "🔵 Shitsuke", "descripcion": "No cumplimiento de normas básicas de orden"},
+    {"fase": "🔵 Shitsuke", "descripcion": "Falta de compromiso del personal con las 5S"},
+    {"fase": "🔵 Shitsuke", "descripcion": "No realización de auditorías internas periódicas"},
+    {"fase": "🔵 Shitsuke", "descripcion": "Supervisores que no refuerzan la cultura 5S"},
+    {"fase": "🔵 Shitsuke", "descripcion": "Inexistencia de capacitaciones o seguimientos"},
+]
+
 SCORE_OPTIONS = [1, 2, 3, 4, 5]
 SEVERITIES = ["Alto", "Medio", "Bajo"]
-FINDING_STATUSES = ["Abierto", "En proceso", "Cerrado"]
+FINDING_STATUSES = ["Abierto", "En progreso", "Cerrado"]
 
 LANGUAGES = {"Español": "es", "English": "en"}
 TRANSLATIONS = {
@@ -82,7 +132,7 @@ TRANSLATIONS = {
         "Zona / Área": "Zone / Area", "Pilar": "Pillar", "Descripción": "Description",
         "Severidad": "Severity", "Acción correctiva": "Corrective action", "Fecha compromiso": "Due date",
         "Estado": "Status", "Alto": "High", "Medio": "Medium", "Bajo": "Low",
-        "Abierto": "Open", "En proceso": "In progress", "Cerrado": "Closed",
+        "Abierto": "Open", "En progreso": "In progress", "Cerrado": "Closed",
         "Editar": "Edit", "Acciones": "Actions", "Buscar zona, descripción o acción": "Search zone, description or action",
         "Limpiar filtros": "Clear filters", "Editar seleccionado": "Edit selected",
         "Eliminar seleccionado": "Delete selected", "Agregar foto": "Add photo", "Subir evidencia": "Upload evidence",
@@ -93,6 +143,12 @@ TRANSLATIONS = {
         "Descargar reporte PDF": "Download PDF report", "Información de la planta": "Site information",
         "Idioma": "Language", "General": "General", "¿Eliminar esta planta 5S?": "Delete this 5S site?",
         "Campo requerido": "Required field",
+        "opcional": "optional", "Evidencia fotográfica": "Photo evidence",
+        "Puntaje por pilar": "Score by pillar", "Cerrar": "Close",
+        "Del catálogo": "From catalog", "Bueno": "Good", "Regular": "Fair", "Bajo": "Poor",
+        "Resultados de auditorías": "Audit results", "Hallazgos por fase": "Findings by pillar",
+        "Estado de hallazgos": "Findings status", "Evidencia fotográfica reciente": "Recent photo evidence",
+        "Fase 5S": "5S Pillar", "filtrado por fase": "filtered by pillar", "Selecciona": "Select",
     }
 }
 
@@ -400,21 +456,54 @@ Usuarios</a>
   </div>
 
   <div class="kpi-row kpi-row-5">
-    <div class="kpi-card"><div class="kpi-value" style="color:{{ NB }}">{{ stats.promedio }}/5</div><div class="kpi-label">{{ tr("Promedio general") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NB }}">{{ stats.promedio }}%</div><div class="kpi-label">{{ tr("Promedio general") }}</div></div>
     <div class="kpi-card"><div class="kpi-value" style="color:{{ NGR }}">{{ stats.num_auditorias }}</div><div class="kpi-label">{{ tr("Auditorías realizadas") }}</div></div>
     <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ stats.abiertos }}</div><div class="kpi-label">{{ tr("Hallazgos abiertos") }}</div></div>
     <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ stats.cerrados }}</div><div class="kpi-label">{{ tr("Hallazgos cerrados") }}</div></div>
     <div class="kpi-card"><div class="kpi-value" style="color:{{ NO }}">{{ stats.total_hallazgos }}</div><div class="kpi-label">{{ tr("Hallazgos") }}</div></div>
   </div>
 
+  <div class="three-col">
+    <div class="chart-card">
+      <h3>{{ tr("Resultados de auditorías") }}</h3>
+      {% for clas, count in stats.resultado_counts.items() %}
+      <div class="progress-row">
+        <span class="progress-label">{{ CLASIFICACION_LABEL.get(clas, clas) }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.num_auditorias*100) if stats.num_auditorias else 0 }}%;background:{{ CLASIFICACION_COLOR.get(clas, NGR) }};"></div></div>
+        <span class="progress-value">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="chart-card">
+      <h3>{{ tr("Hallazgos por fase") }}</h3>
+      {% for f, count in stats.fase_counts.items() %}
+      <div class="progress-row">
+        <span class="progress-label">{{ f }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.total_hallazgos*100) if stats.total_hallazgos else 0 }}%;background:{{ FASE_COLOR.get(f, NGR) }};"></div></div>
+        <span class="progress-value">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="chart-card">
+      <h3>{{ tr("Estado de hallazgos") }}</h3>
+      {% for est, count in stats.estado_counts.items() %}
+      <div class="progress-row">
+        <span class="progress-label">{{ tr(est) }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.total_hallazgos*100) if stats.total_hallazgos else 0 }}%;background:{{ NG if est=='Cerrado' else (RED if est=='Abierto' else NO) }};"></div></div>
+        <span class="progress-value">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
   <div class="two-col">
     <div class="chart-card">
-      <h3>{{ tr("Promedio por pilar") }}</h3>
+      <h3>{{ tr("Promedio por pilar") }} (última auditoría)</h3>
       {% for pil in PILLARS %}
       <div class="progress-row">
         <span class="progress-label">{{ PILLAR_LABELS.get(pil, pil) }}</span>
-        <div class="progress-track"><div class="progress-fill" style="width:{{ (stats.pilares.get(pil,0)/5*100)|round(1) }}%;background:{{ NG if stats.pilares.get(pil,0) >= 4 else (NO if stats.pilares.get(pil,0) >= 3 else RED) }};"></div></div>
-        <span class="progress-value">{{ stats.pilares.get(pil,0) }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ stats.pilares.get(pil,0) }}%;background:{{ NG if stats.pilares.get(pil,0) >= 80 else (NO if stats.pilares.get(pil,0) >= 60 else RED) }};"></div></div>
+        <span class="progress-value">{{ stats.pilares.get(pil,0) }}%</span>
       </div>
       {% endfor %}
     </div>
@@ -430,6 +519,22 @@ Usuarios</a>
       </table>
     </div>
   </div>
+
+  {% if p.get('evidence') %}
+  <div class="chart-card" style="margin-top:16px;">
+    <h3>{{ tr("Evidencia fotográfica reciente") }}</h3>
+    <div class="evidence-grid">
+      {% for ev in p.get('evidence',[])[-4:]|reverse %}
+      <div class="evidence-card">
+        <a href="{{ url_for('evidencia_photo', pid=p.id, filename=ev.filename) }}" target="_blank">
+          <img src="{{ url_for('evidencia_photo', pid=p.id, filename=ev.filename) }}" class="evidence-thumb">
+        </a>
+        <div class="evidence-caption">{{ ev.get('caption','') or '—' }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 {% endblock %}
 """,
     'planta_auditorias.html': """{% extends "base.html" %}
@@ -445,20 +550,26 @@ Usuarios</a>
     <table class="data-table">
       <thead>
         <tr>
-          <th>{{ tr("Fecha") }}</th><th>{{ tr("Auditor") }}</th>
-          {% for pil in PILLARS %}<th>{{ pil }}</th>{% endfor %}
-          <th>{{ tr("Puntaje promedio") }}</th><th>{{ tr("Observaciones") }}</th><th>{{ tr("Acciones") }}</th>
+          <th>{{ tr("Fecha") }}</th><th>{{ tr("Zona / Área") }}</th><th>{{ tr("Auditor") }}</th>
+          {% for f in FASES %}<th>{{ f }}</th>{% endfor %}
+          <th>% General</th><th>{{ tr("Estado") }}</th><th>{{ tr("Observaciones") }}</th><th>{{ tr("Acciones") }}</th>
         </tr>
       </thead>
       <tbody>
         {% for a in p.get('auditorias',[]) %}
+        {% set clas = a.get('clasificacion') or clasificacion_pct(audit_avg(a)) %}
         <tr>
-          <td>{{ a.get('date','') }}</td>
+          <td>{{ a.get('fecha','') }}</td>
+          <td>{{ a.get('area','') or '-' }}</td>
           <td>{{ a.get('auditor','') }}</td>
-          {% for pil in PILLARS %}<td>{{ a.get(pil.lower(),'-') }}</td>{% endfor %}
-          <td><strong>{{ audit_avg(a) }}</strong></td>
+          {% for f in FASES %}<td>{{ a.get('pct_' ~ FASE_KEYS.get(f, f), 0) }}%</td>{% endfor %}
+          <td><strong>{{ audit_avg(a) }}%</strong></td>
+          <td><span class="pill" style="background:{{ CLASIFICACION_COLOR.get(clas,NGR) }};color:#fff;">{{ CLASIFICACION_LABEL.get(clas, clas) }}</span></td>
           <td class="muted">{{ a.get('notes','') or '-' }}</td>
           <td class="actions-cell">
+            {% if a.get('evidencia') %}
+            <a href="{{ url_for('evidencia_photo', pid=p.id, filename=a.get('evidencia')) }}" target="_blank" class="btn-mini">📷</a>
+            {% endif %}
             <a href="{{ url_for('auditoria_form', pid=p.id, idx=loop.index0) }}" class="btn-mini">{{ tr("Editar") }}</a>
             <form method="post" action="{{ url_for('auditoria_delete', pid=p.id, idx=loop.index0) }}" style="display:inline;" onsubmit="return confirm('¿Eliminar?');">
               <button type="submit" class="btn-mini btn-mini-danger">{{ tr("Eliminar") }}</button>
@@ -475,13 +586,17 @@ Usuarios</a>
 {% block sidebar %}{% include "_sidebar_planta.html" %}{% endblock %}
 
 {% block content %}
-  <div class="form-card">
+  <div class="form-card form-card-wide">
     <h2>{{ tr("Nueva auditoría") }}</h2>
-    <form method="post">
-      <div class="form-row-2">
+    <form method="post" enctype="multipart/form-data">
+      <div class="form-row-3">
         <div>
           <label>{{ tr("Fecha") }}</label>
-          <input type="date" name="date" value="{{ old.get('date','') }}" required>
+          <input type="date" name="date" value="{{ old.get('fecha','') }}" required>
+        </div>
+        <div>
+          <label>{{ tr("Zona / Área") }}</label>
+          <input type="text" name="area" value="{{ old.get('area','') }}" placeholder="Ej: Inbound, Packing, Woodshop">
         </div>
         <div>
           <label>{{ tr("Auditor") }}</label>
@@ -489,19 +604,24 @@ Usuarios</a>
         </div>
       </div>
 
-      <div class="form-section-label">{{ tr("Puntaje por pilar") }} (1-5)</div>
-      <div class="form-row-3">
-        {% for pil in PILLARS %}
-        <div>
-          <label>{{ PILLAR_LABELS.get(pil, pil) }}</label>
-          <select name="{{ pil.lower() }}">
-            {% for s in SCORE_OPTIONS %}<option value="{{ s }}" {{ 'selected' if old.get(pil.lower())|string == s|string }}>{{ s }}</option>{% endfor %}
-          </select>
+      <div class="form-section-label">Check-List 5S</div>
+      {% set old_resp = old.get('respuestas', []) %}
+      {% for fase, pregunta in PREGUNTAS %}
+      {% set checked_val = old_resp[loop.index0] if loop.index0 < old_resp|length else none %}
+      <div class="checklist-row">
+        <span class="checklist-fase" style="color:{{ FASE_COLOR.get(fase, NB) }};">{{ fase }}</span>
+        <span class="checklist-question">{{ pregunta }}</span>
+        <div class="checklist-btns">
+          <label class="chk-btn chk-si"><input type="radio" name="q{{ loop.index0 }}" value="1" {{ 'checked' if checked_val == 1 else '' }}> ✓ Sí</label>
+          <label class="chk-btn chk-no"><input type="radio" name="q{{ loop.index0 }}" value="0" {{ 'checked' if checked_val == 0 else '' }}> ✗ No</label>
         </div>
-        {% endfor %}
       </div>
+      {% endfor %}
 
-      <label>{{ tr("Observaciones") }}</label>
+      <div class="form-section-label">{{ tr("Evidencia fotográfica") }} ({{ tr("opcional") }})</div>
+      <input type="file" name="photo" accept="image/*" capture="environment">
+
+      <label style="margin-top:16px;">{{ tr("Observaciones") }}</label>
       <textarea name="notes" rows="3">{{ old.get('notes','') }}</textarea>
 
       <div class="form-actions">
@@ -525,7 +645,7 @@ Usuarios</a>
     <input type="text" id="hz-search" placeholder="{{ tr('Buscar zona, descripción o acción') }}...">
     <select id="filter-pillar">
       <option value="">{{ tr("Pilar") }}: {{ tr("Todos") }}</option>
-      {% for pil in PILLARS %}<option value="{{ pil }}">{{ pil }}</option>{% endfor %}
+      {% for f in FASES %}<option value="{{ f }}">{{ f }}</option>{% endfor %}
     </select>
     <select id="filter-severity">
       <option value="">{{ tr("Severidad") }}: {{ tr("Todos") }}</option>
@@ -546,6 +666,7 @@ Usuarios</a>
           <th>#</th><th>{{ tr("Fecha") }}</th><th>{{ tr("Zona / Área") }}</th><th>{{ tr("Pilar") }}</th>
           <th>{{ tr("Descripción") }}</th><th>{{ tr("Severidad") }}</th><th>{{ tr("Acción correctiva") }}</th>
           <th>{{ tr("Responsable") }}</th><th>{{ tr("Fecha compromiso") }}</th><th>{{ tr("Estado") }}</th>
+          <th>{{ tr("Acciones") }}</th>
         </tr>
       </thead>
       <tbody>
@@ -564,6 +685,17 @@ Usuarios</a>
           <td>{{ h.get('responsible','') }}</td>
           <td>{{ h.get('due_date','') or '-' }}</td>
           <td><span class="pill {{ 'pill-green' if h.get('status')=='Cerrado' else ('pill-red' if h.get('status')=='Abierto' else 'pill-blue') }}">{{ tr(h.get('status','')) }}</span></td>
+          <td class="actions-cell">
+            {% if h.get('evidencia') %}
+            <a href="{{ url_for('evidencia_photo', pid=p.id, filename=h.get('evidencia')) }}" target="_blank" class="btn-mini">📷</a>
+            {% endif %}
+            <a href="{{ url_for('hallazgo_form', pid=p.id, idx=loop.index0) }}" class="btn-mini">{{ tr("Editar") }}</a>
+            {% if h.get('status') != 'Cerrado' %}
+            <form method="post" action="{{ url_for('hallazgo_close', pid=p.id, idx=loop.index0) }}" style="display:inline;">
+              <button type="submit" class="btn-mini" style="background:{{ NG }};">✔ {{ tr("Cerrar") }}</button>
+            </form>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -658,7 +790,7 @@ Usuarios</a>
   <div class="form-card form-card-wide">
     <h2>{{ tr("Hallazgo 5S") }}</h2>
     {% if error %}<p class="error-note">{{ tr("Campo requerido") }}</p>{% endif %}
-    <form method="post">
+    <form method="post" enctype="multipart/form-data">
       <div class="form-row-3">
         <div>
           <label>{{ tr("Fecha") }}</label>
@@ -669,15 +801,20 @@ Usuarios</a>
           <input type="text" name="area" value="{{ old.get('area','') }}" required>
         </div>
         <div>
-          <label>{{ tr("Pilar") }}</label>
-          <select name="pillar">
-            {% for pil in PILLARS %}<option value="{{ pil }}" {{ 'selected' if old.get('pillar')==pil }}>{{ pil }}</option>{% endfor %}
+          <label>{{ tr("Fase 5S") }}</label>
+          <select name="pillar" id="hz-fase">
+            {% for f in FASES %}<option value="{{ f }}" {{ 'selected' if old.get('pillar')==f }}>{{ f }}</option>{% endfor %}
           </select>
         </div>
       </div>
 
+      <label>{{ tr("Del catálogo") }} ({{ tr("filtrado por fase") }})</label>
+      <select id="hz-catalogo">
+        <option value="">{{ tr("Selecciona") }}...</option>
+      </select>
+
       <label>{{ tr("Descripción") }}</label>
-      <textarea name="description" rows="2">{{ old.get('description','') }}</textarea>
+      <textarea name="description" id="hz-desc" rows="2">{{ old.get('description','') }}</textarea>
 
       <div class="form-row-2">
         <div>
@@ -708,12 +845,40 @@ Usuarios</a>
         </div>
       </div>
 
+      <label>{{ tr("Evidencia fotográfica") }} ({{ tr("opcional") }})</label>
+      <input type="file" name="photo" accept="image/*" capture="environment">
+
       <div class="form-actions">
         <a href="{{ url_for('planta_hallazgos', pid=p.id) }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
         <button type="submit" class="btn-primary">{{ tr("Guardar") }}</button>
       </div>
     </form>
   </div>
+
+<script>
+(function(){
+  var CATALOGO = {{ DEFAULT_CATALOGO|tojson }};
+  var faseSel = document.getElementById('hz-fase');
+  var catSel = document.getElementById('hz-catalogo');
+  var descTa = document.getElementById('hz-desc');
+
+  function refreshCatalogo(){
+    var fase = faseSel.value;
+    catSel.innerHTML = '<option value="">Selecciona...</option>';
+    CATALOGO.filter(function(c){ return c.fase === fase; }).forEach(function(c){
+      var opt = document.createElement('option');
+      opt.value = c.descripcion;
+      opt.textContent = c.descripcion;
+      catSel.appendChild(opt);
+    });
+  }
+  faseSel.addEventListener('change', refreshCatalogo);
+  catSel.addEventListener('change', function(){
+    if (catSel.value) descTa.value = catSel.value;
+  });
+  refreshCatalogo();
+})();
+</script>
 {% endblock %}
 """,
     'planta_evidencia.html': """{% extends "base.html" %}
@@ -1130,7 +1295,21 @@ a{text-decoration:none;color:inherit;}
   letter-spacing:0.4px;margin:22px 0 4px;padding-top:14px;border-top:1px solid var(--border);}
 .form-section-label:first-of-type{border-top:none;padding-top:0;margin-top:6px;}
 
+.checklist-row{display:flex;align-items:center;gap:10px;padding:8px 0;
+  border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.checklist-fase{font-size:11px;font-weight:700;width:90px;flex-shrink:0;}
+.checklist-question{flex:1;font-size:13px;min-width:160px;}
+.checklist-btns{display:flex;gap:6px;flex-shrink:0;}
+.chk-btn{display:flex;align-items:center;gap:4px;font-size:12px;font-weight:700;
+  padding:6px 10px;border-radius:6px;cursor:pointer;border:1px solid var(--border);}
+.chk-btn input{margin:0;width:auto;}
+.chk-si{color:var(--green);}
+.chk-si:has(input:checked){background:var(--green);color:#fff;border-color:var(--green);}
+.chk-no{color:var(--red);}
+.chk-no:has(input:checked){background:var(--red);color:#fff;border-color:var(--red);}
+
 .two-col{display:grid;grid-template-columns:1fr;gap:14px;}
+.three-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px;}
 .chart-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;}
 .chart-card h3{margin:0 0 12px;font-size:13px;color:var(--blue);text-transform:uppercase;font-weight:700;}
 
@@ -1232,6 +1411,8 @@ app.secret_key = os.environ.get("SECRET_KEY", "nefab-5s-web-dev-only")
 app.jinja_env.globals.update(
     tr=tr, AREA_COLOR=AREA_COLOR, AREAS=AREAS, PILLARS=PILLARS, PILLAR_LABELS=PILLAR_LABELS,
     SCORE_OPTIONS=SCORE_OPTIONS, SEVERITIES=SEVERITIES, FINDING_STATUSES=FINDING_STATUSES,
+    FASES=FASES, FASE_KEYS=FASE_KEYS, FASE_COLOR=FASE_COLOR, PREGUNTAS=PREGUNTAS,
+    DEFAULT_CATALOGO=DEFAULT_CATALOGO,
     NB=NB, NO=NO, NG=NG, NGR=NGR, BG=BG, CARD=CARD, BORDER=BORDER,
     DARK=DARK, MUTED=MUTED, WHITE=WHITE, RED=RED, NBL=NBL,
 )
@@ -1491,33 +1672,94 @@ def to_num(v):
 
 
 def audit_avg(a):
-    vals = [to_num(a.get(pil.lower())) for pil in PILLARS if a.get(pil.lower())]
-    return round(sum(vals) / len(vals), 1) if vals else 0.0
+    """Compatibilidad: si la auditoria tiene 'pct_total' (checklist nuevo) lo
+    usa; si no, calcula desde 'respuestas' directamente."""
+    if "pct_total" in a:
+        return round(to_num(a.get("pct_total")), 1)
+    respuestas = a.get("respuestas", [])
+    if not respuestas:
+        return 0.0
+    return round(sum(respuestas) / len(respuestas) * 100, 1)
+
+
+def clasificacion_pct(pct):
+    if pct >= 80:
+        return "Bueno"
+    if pct >= 60:
+        return "Regular"
+    return "Bajo"
+
+
+CLASIFICACION_LABEL = {
+    "Bueno": "🟢 BUENO", "Regular": "🟡 REGULAR", "Bajo": "🔴 BAJO",
+}
+CLASIFICACION_COLOR = {"Bueno": NG, "Regular": "#FDD835", "Bajo": RED}
+
+
+def compute_auditoria(respuestas, area, auditor, fecha, notes=""):
+    """Dado un checklist de 10 respuestas (0/1), calcula pct_total y pct por
+    fase, exactamente igual que la app de escritorio."""
+    total_pts = sum(respuestas)
+    pct_total = round(total_pts / len(respuestas) * 100, 1) if respuestas else 0.0
+    pcts = {}
+    for fase, idxs in FASES_MAP_IDX.items():
+        vals = [respuestas[i] for i in idxs if i < len(respuestas)]
+        pcts[fase] = round(sum(vals) / len(vals) * 100, 1) if vals else 0.0
+    item = {
+        "fecha": fecha, "area": area, "auditor": auditor,
+        "pct_total": pct_total, "respuestas": respuestas, "notes": notes,
+    }
+    for f, v in pcts.items():
+        item[f"pct_{f}"] = v
+    item["clasificacion"] = clasificacion_pct(pct_total)
+    return item
 
 
 def planta_stats(p):
-    """KPIs del dashboard: promedio general, auditorias realizadas, hallazgos
-    abiertos/cerrados, y promedio de cada pilar (de la auditoria mas reciente
-    si existe, si no, 0)."""
+    """KPIs del dashboard + desgloses para los 3 paneles equivalentes a los
+    donuts de la app de escritorio: resultados de auditoria (Bueno/Regular/
+    Bajo), hallazgos por fase, y estado de hallazgos."""
     auditorias = p.get("auditorias", [])
     hallazgos = p.get("hallazgos", [])
+
     if auditorias:
         promedio = round(sum(audit_avg(a) for a in auditorias) / len(auditorias), 1)
         ultima = auditorias[-1]
-        pilares = {pil: to_num(ultima.get(pil.lower())) for pil in PILLARS}
+        pilares = {pil: to_num(ultima.get(f"pct_{pil}", 0)) for pil in PILLARS}
     else:
         promedio = 0.0
         pilares = {pil: 0.0 for pil in PILLARS}
+
+    resultado_counts = {"Bueno": 0, "Regular": 0, "Bajo": 0}
+    for a in auditorias:
+        clas = a.get("clasificacion") or clasificacion_pct(audit_avg(a))
+        resultado_counts[clas] = resultado_counts.get(clas, 0) + 1
+
+    fase_counts = {f: 0 for f in FASES}
+    for h in hallazgos:
+        fase = h.get("fase", "")
+        if fase in fase_counts:
+            fase_counts[fase] += 1
+
+    estado_counts = {"Abierto": 0, "En progreso": 0, "Cerrado": 0}
+    for h in hallazgos:
+        est = h.get("status", "Abierto")
+        estado_counts[est] = estado_counts.get(est, 0) + 1
+
     abiertos = sum(1 for h in hallazgos if h.get("status") != "Cerrado")
     cerrados = sum(1 for h in hallazgos if h.get("status") == "Cerrado")
     return {
         "promedio": promedio, "num_auditorias": len(auditorias),
         "abiertos": abiertos, "cerrados": cerrados, "total_hallazgos": len(hallazgos),
-        "pilares": pilares,
+        "pilares": pilares, "resultado_counts": resultado_counts,
+        "fase_counts": fase_counts, "estado_counts": estado_counts,
     }
 
 
-app.jinja_env.globals.update(audit_avg=audit_avg)
+app.jinja_env.globals.update(
+    audit_avg=audit_avg, clasificacion_pct=clasificacion_pct,
+    CLASIFICACION_LABEL=CLASIFICACION_LABEL, CLASIFICACION_COLOR=CLASIFICACION_COLOR,
+)
 
 
 # ── Lista de plantas ─────────────────────────────────────────────────────
@@ -1605,10 +1847,36 @@ def auditoria_form(pid):
     idx = request.args.get("idx", type=int)
     old = p["auditorias"][idx] if idx is not None and 0 <= idx < len(p["auditorias"]) else {}
     if request.method == "POST":
-        item = {"date": request.form.get("date", "").strip(), "auditor": request.form.get("auditor", "").strip()}
-        for pil in PILLARS:
-            item[pil.lower()] = request.form.get(pil.lower(), "3")
-        item["notes"] = request.form.get("notes", "").strip()
+        respuestas = []
+        for i in range(len(PREGUNTAS)):
+            respuestas.append(1 if request.form.get(f"q{i}") == "1" else 0)
+        item = compute_auditoria(
+            respuestas,
+            area=request.form.get("area", "").strip(),
+            auditor=request.form.get("auditor", "").strip(),
+            fecha=request.form.get("date", "").strip() or date.today().isoformat(),
+            notes=request.form.get("notes", "").strip(),
+        )
+        if idx is not None and old.get("evidencia"):
+            item["evidencia"] = old["evidencia"]
+
+        file = request.files.get("photo")
+        if file and file.filename:
+            ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+            if ext in ALLOWED_PHOTO_EXT:
+                planta_photo_dir = PHOTOS_DIR / pid
+                planta_photo_dir.mkdir(parents=True, exist_ok=True)
+                unique_name = secure_filename(
+                    f"audit_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}.{ext}"
+                )
+                file.save(str(planta_photo_dir / unique_name))
+                item["evidencia"] = unique_name
+                p.setdefault("evidence", []).append({
+                    "filename": unique_name,
+                    "caption": f"Auditoría {item['fecha']} — {item.get('area','')}",
+                    "date": date.today().isoformat(),
+                })
+
         if idx is not None:
             p["auditorias"][idx] = item
         else:
@@ -1647,7 +1915,7 @@ def hallazgo_form(pid):
         item = {
             "date": request.form.get("date", "").strip(),
             "area": request.form.get("area", "").strip(),
-            "pillar": request.form.get("pillar", PILLARS[0]),
+            "pillar": request.form.get("pillar", FASES[0]),
             "description": request.form.get("description", "").strip(),
             "severity": request.form.get("severity", SEVERITIES[0]),
             "status": request.form.get("status", FINDING_STATUSES[0]),
@@ -1657,6 +1925,26 @@ def hallazgo_form(pid):
         }
         if not item["area"]:
             return render_template("hallazgo_form.html", p=p, old=item, idx=idx, error=True)
+        if idx is not None and old.get("evidencia"):
+            item["evidencia"] = old["evidencia"]
+
+        file = request.files.get("photo")
+        if file and file.filename:
+            ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+            if ext in ALLOWED_PHOTO_EXT:
+                planta_photo_dir = PHOTOS_DIR / pid
+                planta_photo_dir.mkdir(parents=True, exist_ok=True)
+                unique_name = secure_filename(
+                    f"hallazgo_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}.{ext}"
+                )
+                file.save(str(planta_photo_dir / unique_name))
+                item["evidencia"] = unique_name
+                p.setdefault("evidence", []).append({
+                    "filename": unique_name,
+                    "caption": f"Hallazgo — {item.get('area','')}: {item.get('description','')[:60]}",
+                    "date": date.today().isoformat(),
+                })
+
         if idx is not None:
             p["hallazgos"][idx] = item
         else:
@@ -1673,6 +1961,16 @@ def hallazgo_delete(pid, idx):
     plantas, p = get_planta_or_404(pid)
     if 0 <= idx < len(p["hallazgos"]):
         p["hallazgos"].pop(idx)
+        touch_and_save(plantas, p)
+    return redirect(url_for("planta_hallazgos", pid=pid))
+
+
+@app.route("/planta/<pid>/hallazgos/<int:idx>/close", methods=["POST"])
+@login_required
+def hallazgo_close(pid, idx):
+    plantas, p = get_planta_or_404(pid)
+    if 0 <= idx < len(p["hallazgos"]):
+        p["hallazgos"][idx]["status"] = "Cerrado"
         touch_and_save(plantas, p)
     return redirect(url_for("planta_hallazgos", pid=pid))
 
@@ -1761,11 +2059,11 @@ def planta_export_zip(pid):
     _, p = get_planta_or_404(pid)
     exports = {
         "auditorias_5s.csv": (
-            ["Fecha", "Auditor"] + PILLARS + ["Promedio", "Observaciones"],
+            ["Fecha", "Zona/Area", "Auditor"] + PILLARS + ["% General", "Clasificacion", "Observaciones"],
             p.get("auditorias", []),
         ),
         "hallazgos_5s.csv": (
-            ["Fecha", "Zona/Area", "Pilar", "Descripcion", "Severidad", "Accion correctiva",
+            ["Fecha", "Zona/Area", "Fase", "Descripcion", "Severidad", "Accion correctiva",
              "Responsable", "Fecha compromiso", "Estado"],
             p.get("hallazgos", []),
         ),
@@ -1777,8 +2075,10 @@ def planta_export_zip(pid):
         writer = csv.writer(csv_buf)
         writer.writerow(exports["auditorias_5s.csv"][0])
         for a in exports["auditorias_5s.csv"][1]:
-            row = [a.get("date", ""), a.get("auditor", "")] + [a.get(pil.lower(), "") for pil in PILLARS] \
-                + [audit_avg(a), a.get("notes", "")]
+            clas = a.get("clasificacion") or clasificacion_pct(audit_avg(a))
+            row = [a.get("fecha", ""), a.get("area", ""), a.get("auditor", "")] \
+                + [a.get(f"pct_{pil}", "") for pil in PILLARS] \
+                + [audit_avg(a), clas, a.get("notes", "")]
             writer.writerow(row)
         zf.writestr("auditorias_5s.csv", csv_buf.getvalue())
         # Hallazgos
@@ -1906,7 +2206,7 @@ def generate_pdf_report(p):
     stats = planta_stats(p)
     _pdf_section_title(pdf, "KPIs")
     kpi_items = [
-        ("Promedio general", f"{stats['promedio']}/5", _PDF_BLUE),
+        ("Promedio general", f"{stats['promedio']}%", _PDF_BLUE),
         ("Auditorías", str(stats["num_auditorias"]), _PDF_GRAY),
         ("Hallazgos abiertos", str(stats["abiertos"]), _PDF_RED),
         ("Hallazgos cerrados", str(stats["cerrados"]), _PDF_GREEN),
@@ -1934,12 +2234,12 @@ def generate_pdf_report(p):
         val = stats["pilares"].get(pil, 0)
         pdf.set_font("Helvetica", "", 9)
         pdf.cell(55, 6, _pdf_safe(PILLAR_LABELS.get(pil, pil)), 0, 0)
-        bar_w = max(1.0, 20.0 * (val / 5.0))
-        color = _PDF_GREEN if val >= 4 else (_PDF_ORANGE if val >= 3 else _PDF_RED)
+        bar_w = max(1.0, 40.0 * (val / 100.0))
+        color = _PDF_GREEN if val >= 80 else (_PDF_ORANGE if val >= 60 else _PDF_RED)
         pdf.set_fill_color(*color)
         pdf.rect(pdf.get_x(), y + 1, bar_w, 4, "F")
         pdf.set_xy(pdf.get_x() + 22, y)
-        pdf.cell(20, 6, f"{val}", 0, 0)
+        pdf.cell(20, 6, f"{val}%", 0, 0)
         pdf.ln(6)
     pdf.ln(2)
 
@@ -1947,12 +2247,14 @@ def generate_pdf_report(p):
     if auditorias:
         pdf.add_page(orientation="L")
         _pdf_header(pdf, "Auditorías 5S")
-        widths = [25, 35] + [30] * 5 + [20, 92]
-        headers = ["Fecha", "Auditor"] + PILLARS + ["Prom.", "Observaciones"]
+        widths = [22, 30, 30] + [25] * 5 + [18, 20, 62]
+        headers = ["Fecha", "Zona/Área", "Auditor"] + PILLARS + ["% Gen.", "Result.", "Observaciones"]
         _pdf_table_row(pdf, headers, widths, header=True)
         for i, a in enumerate(auditorias):
-            row = [a.get("date", ""), a.get("auditor", "")] + [str(a.get(pil.lower(), "")) for pil in PILLARS] \
-                + [str(audit_avg(a)), a.get("notes", "")]
+            clas = a.get("clasificacion") or clasificacion_pct(audit_avg(a))
+            row = [a.get("fecha", ""), a.get("area", ""), a.get("auditor", "")] \
+                + [str(a.get(f"pct_{pil}", "")) for pil in PILLARS] \
+                + [str(audit_avg(a)), clas, a.get("notes", "")]
             _pdf_table_row(pdf, row, widths, fill=(245, 247, 250) if i % 2 else None)
 
     hallazgos = p.get("hallazgos", [])

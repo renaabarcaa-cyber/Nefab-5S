@@ -149,6 +149,10 @@ TRANSLATIONS = {
         "Resultados de auditorías": "Audit results", "Hallazgos por fase": "Findings by pillar",
         "Estado de hallazgos": "Findings status", "Evidencia fotográfica reciente": "Recent photo evidence",
         "Fase 5S": "5S Pillar", "filtrado por fase": "filtered by pillar", "Selecciona": "Select",
+        "País": "Country", "Editar planta": "Edit site", "separadas por coma": "comma-separated",
+        "Áreas / zonas de la planta": "Site areas / zones", "Catálogo de posibilidades": "Catalog of possibilities",
+        "Gestionar catálogo": "Manage catalog", "Agregar al catálogo": "Add to catalog",
+        "Volver": "Back",
     }
 }
 
@@ -287,6 +291,65 @@ TEMPLATES = {
   </div>
 {% endblock %}
 """,
+    'catalogo.html': """{% extends "base.html" %}
+{% block sidebar %}
+  {% if pid %}
+  <a href="{{ url_for('planta_hallazgos', pid=pid) }}" class="sidebar-btn">← {{ tr("Volver") }}</a>
+  {% else %}
+  <a href="{{ url_for('plantas_list') }}" class="sidebar-btn">← {{ tr("Volver a plantas") }}</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+  <h2>{{ tr("Catálogo de posibilidades") }}</h2>
+  <p class="muted-note">Catálogo global de descripciones sugeridas para hallazgos, compartido entre todas las plantas.</p>
+
+  <div class="form-card" style="margin-bottom:20px;">
+    <form method="post" action="{{ url_for('catalogo_add') }}">
+      <input type="hidden" name="pid" value="{{ pid }}">
+      <div class="form-row-2">
+        <div>
+          <label>{{ tr("Fase") }}</label>
+          <select name="fase">
+            {% for f in FASES %}<option value="{{ f }}">{{ f }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>{{ tr("Descripción") }}</label>
+          <input type="text" name="descripcion" required>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">{{ tr("Agregar al catálogo") }}</button>
+      </div>
+    </form>
+  </div>
+
+  {% for f in FASES %}
+  <div class="chart-card" style="margin-bottom:14px;">
+    <h3 style="color:{{ FASE_COLOR.get(f, NB) }};">{{ f }}</h3>
+    {% if grouped.get(f) %}
+    <table class="data-table">
+      <tbody>
+        {% for real_idx, c in grouped[f] %}
+        <tr>
+          <td>{{ c.descripcion }}</td>
+          <td class="actions-cell" style="width:80px;">
+            <form method="post" action="{{ url_for('catalogo_delete', idx=real_idx, pid=pid) }}" onsubmit="return confirm('¿Eliminar esta entrada del catálogo?');">
+              <button type="submit" class="btn-mini btn-mini-danger">{{ tr("Eliminar") }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted-note">Sin entradas.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+{% endblock %}
+""",
     'admin_user_form.html': """{% extends "base.html" %}
 {% block sidebar %}
   <a href="{{ url_for('admin_users') }}" class="sidebar-btn">← Volver a usuarios</a>
@@ -393,10 +456,11 @@ Usuarios</a>
     <div class="project-card">
       <div class="area-badge" style="background:{{ AREA_COLOR.get(p.get('area','Logística'), NB) }}">{{ tr(p.get('area','Logística')) }}</div>
       <h3>{{ p.get('name','') }}</h3>
-      <p class="muted">{{ p.get('customer','') }} · {{ p.get('site','') }} · {{ p.get('created_at','') }}</p>
+      <p class="muted">{{ p.get('pais','') }}{% if p.get('pais') %} · {% endif %}{{ p.get('customer','') }} · {{ p.get('site','') }} · {{ p.get('created_at','') }}</p>
       <p class="muted">{{ p._num_auditorias }} auditorías · {{ tr("Promedio general") }}: {{ p._promedio }}/5</p>
       <div class="card-actions">
         <a href="{{ url_for('planta_overview', pid=p.id) }}" class="btn-primary">{{ tr("Abrir") }}</a>
+        <a href="{{ url_for('edit_planta_view', pid=p.id) }}" class="btn-secondary">{{ tr("Editar") }}</a>
         <form method="post" action="{{ url_for('delete_planta', pid=p.id) }}" onsubmit="return confirm('{{ tr('¿Eliminar esta planta 5S?') }}');" style="display:inline;">
           <button type="submit" class="btn-danger">{{ tr("Eliminar") }}</button>
         </form>
@@ -413,33 +477,44 @@ Usuarios</a>
 
 {% block content %}
   <div class="form-card">
-    <h2>{{ tr("Nueva planta") }}</h2>
+    <h2>{{ tr("Editar planta") if old else tr("Nueva planta") }}</h2>
     <form method="post">
-      <label>{{ tr("Nombre de la planta") }}</label>
-      <input type="text" name="name" required>
+      <div class="form-row-2">
+        <div>
+          <label>{{ tr("País") }}</label>
+          <input type="text" name="pais" value="{{ old.get('pais','') }}" placeholder="Ej: Chile, Brasil, México">
+        </div>
+        <div>
+          <label>{{ tr("Nombre de la planta") }}</label>
+          <input type="text" name="name" value="{{ old.get('name','') }}" required>
+        </div>
+      </div>
 
       <label>{{ tr("Sitio / Operación") }}</label>
-      <input type="text" name="site">
+      <input type="text" name="site" value="{{ old.get('site','') }}">
 
       <label>{{ tr("Cliente") }}</label>
-      <input type="text" name="customer">
+      <input type="text" name="customer" value="{{ old.get('customer','') }}">
 
       <label>{{ tr("Responsable") }}</label>
-      <input type="text" name="owner">
+      <input type="text" name="owner" value="{{ old.get('owner','') }}">
 
       <label>{{ tr("Área") }}</label>
       <select name="area">
         {% for a in AREAS %}
-        <option value="{{ a }}">{{ tr(a) }}</option>
+        <option value="{{ a }}" {{ 'selected' if old.get('area')==a }}>{{ tr(a) }}</option>
         {% endfor %}
       </select>
 
+      <label>{{ tr("Áreas / zonas de la planta") }} ({{ tr("separadas por coma") }})</label>
+      <input type="text" name="areas" value="{{ old.get('areas',[])|join(', ') }}" placeholder="Ej: Inbound, Packing, Woodshop, Outbound, Quality">
+
       <label>{{ tr("Problema / Alcance") }}</label>
-      <textarea name="problem" rows="3"></textarea>
+      <textarea name="problem" rows="3">{{ old.get('problem','') }}</textarea>
 
       <div class="form-actions">
         <a href="{{ url_for('plantas_list') }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
-        <button type="submit" class="btn-primary">{{ tr("Crear") }}</button>
+        <button type="submit" class="btn-primary">{{ tr("Guardar") if old else tr("Crear") }}</button>
       </div>
     </form>
   </div>
@@ -511,12 +586,17 @@ Usuarios</a>
     <div class="chart-card">
       <h3>{{ tr("Información de la planta") }}</h3>
       <table class="info-table">
+        <tr><td class="muted">{{ tr("País") }}</td><td>{{ p.get('pais','—') }}</td></tr>
         <tr><td class="muted">{{ tr("Sitio / Operación") }}</td><td>{{ p.get('site','—') }}</td></tr>
         <tr><td class="muted">{{ tr("Cliente") }}</td><td>{{ p.get('customer','—') }}</td></tr>
         <tr><td class="muted">{{ tr("Responsable") }}</td><td>{{ p.get('owner','—') }}</td></tr>
         <tr><td class="muted">{{ tr("Área") }}</td><td>{{ tr(p.get('area','Logística')) }}</td></tr>
+        <tr><td class="muted">{{ tr("Áreas / zonas de la planta") }}</td><td>{{ p.get('areas',[])|join(', ') or '—' }}</td></tr>
         <tr><td class="muted">{{ tr("Problema / Alcance") }}</td><td>{{ p.get('problem','—') }}</td></tr>
       </table>
+    </div>
+    <div class="chart-card" style="margin-top:12px;">
+      <a href="{{ url_for('edit_planta_view', pid=p.id) }}" class="btn-secondary" style="display:inline-block;">✏️ {{ tr("Editar planta") }}</a>
     </div>
   </div>
 
@@ -596,7 +676,14 @@ Usuarios</a>
         </div>
         <div>
           <label>{{ tr("Zona / Área") }}</label>
+          {% if p.get('areas') %}
+          <select name="area">
+            <option value="">—</option>
+            {% for ar in p.get('areas',[]) %}<option value="{{ ar }}" {{ 'selected' if old.get('area')==ar }}>{{ ar }}</option>{% endfor %}
+          </select>
+          {% else %}
           <input type="text" name="area" value="{{ old.get('area','') }}" placeholder="Ej: Inbound, Packing, Woodshop">
+          {% endif %}
         </div>
         <div>
           <label>{{ tr("Auditor") }}</label>
@@ -630,6 +717,26 @@ Usuarios</a>
       </div>
     </form>
   </div>
+
+<script>
+(function(){
+  // Refuerza visualmente la seleccion Si/No con JS (no depender solo de :has() en CSS,
+  // que puede fallar en algunos navegadores/WebViews).
+  document.querySelectorAll('.checklist-row').forEach(function(row){
+    var labels = row.querySelectorAll('.chk-btn');
+    function refresh(){
+      labels.forEach(function(lbl){
+        var input = lbl.querySelector('input');
+        lbl.classList.toggle('chk-selected', input.checked);
+      });
+    }
+    labels.forEach(function(lbl){
+      lbl.querySelector('input').addEventListener('change', refresh);
+    });
+    refresh();
+  });
+})();
+</script>
 {% endblock %}
 """,
     'planta_hallazgos.html': """{% extends "base.html" %}
@@ -798,7 +905,14 @@ Usuarios</a>
         </div>
         <div>
           <label>{{ tr("Zona / Área") }}</label>
+          {% if p.get('areas') %}
+          <select name="area" required>
+            <option value="">—</option>
+            {% for ar in p.get('areas',[]) %}<option value="{{ ar }}" {{ 'selected' if old.get('area')==ar }}>{{ ar }}</option>{% endfor %}
+          </select>
+          {% else %}
           <input type="text" name="area" value="{{ old.get('area','') }}" required>
+          {% endif %}
         </div>
         <div>
           <label>{{ tr("Fase 5S") }}</label>
@@ -808,7 +922,7 @@ Usuarios</a>
         </div>
       </div>
 
-      <label>{{ tr("Del catálogo") }} ({{ tr("filtrado por fase") }})</label>
+      <label>{{ tr("Del catálogo") }} ({{ tr("filtrado por fase") }}) — <a href="{{ url_for('catalogo_view', pid=p.id) }}" style="font-weight:400;font-size:11px;">{{ tr("Gestionar catálogo") }}</a></label>
       <select id="hz-catalogo">
         <option value="">{{ tr("Selecciona") }}...</option>
       </select>
@@ -857,7 +971,7 @@ Usuarios</a>
 
 <script>
 (function(){
-  var CATALOGO = {{ DEFAULT_CATALOGO|tojson }};
+  var CATALOGO = {{ catalogo|tojson }};
   var faseSel = document.getElementById('hz-fase');
   var catSel = document.getElementById('hz-catalogo');
   var descTa = document.getElementById('hz-desc');
@@ -1304,9 +1418,9 @@ a{text-decoration:none;color:inherit;}
   padding:6px 10px;border-radius:6px;cursor:pointer;border:1px solid var(--border);}
 .chk-btn input{margin:0;width:auto;}
 .chk-si{color:var(--green);}
-.chk-si:has(input:checked){background:var(--green);color:#fff;border-color:var(--green);}
+.chk-si:has(input:checked), .chk-si.chk-selected{background:var(--green);color:#fff;border-color:var(--green);}
 .chk-no{color:var(--red);}
-.chk-no:has(input:checked){background:var(--red);color:#fff;border-color:var(--red);}
+.chk-no:has(input:checked), .chk-no.chk-selected{background:var(--red);color:#fff;border-color:var(--red);}
 
 .two-col{display:grid;grid-template-columns:1fr;gap:14px;}
 .three-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px;}
@@ -1430,7 +1544,27 @@ def logo_png():
 
 # ── Usuarios y sesión (login + roles admin/usuario) ─────────────────────────
 USERS_FILE = DATA_DIR / "usuarios_5s.json"
+CATALOGO_FILE = DATA_DIR / "catalogo_5s.json"
 _users_lock = threading.Lock()
+_catalogo_lock = threading.Lock()
+
+
+def load_catalogo():
+    with _catalogo_lock:
+        if CATALOGO_FILE.exists():
+            try:
+                data = json.loads(CATALOGO_FILE.read_text(encoding="utf-8"))
+                return data if data else DEFAULT_CATALOGO
+            except Exception:
+                return DEFAULT_CATALOGO
+        return DEFAULT_CATALOGO
+
+
+def save_catalogo(data):
+    with _catalogo_lock:
+        tmp_file = CATALOGO_FILE.with_suffix(".tmp")
+        tmp_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_file.replace(CATALOGO_FILE)
 _plantas_lock = threading.Lock()
 
 
@@ -1646,11 +1780,12 @@ def touch_and_save(plantas, p):
     save_plantas(plantas)
 
 
-def new_planta(name, site, customer, owner, problem, area="Logística"):
+def new_planta(name, site, customer, owner, problem, area="Logística", pais="", areas=None):
     return {
         "id": gen_id(), "name": name or "Nueva planta 5S", "site": site or "",
         "customer": customer or "", "owner": owner or "", "problem": problem or "",
         "area": area if area in AREAS else "Logística",
+        "pais": pais or "", "areas": areas or [],
         "created_at": date.today().isoformat(),
         "auditorias": [], "hallazgos": [], "evidence": [],
     }
@@ -1790,6 +1925,8 @@ def plantas_list():
 def new_planta_view():
     if request.method == "POST":
         plantas = load_plantas()
+        areas_raw = request.form.get("areas", "").strip()
+        areas_list = [a.strip() for a in areas_raw.split(",") if a.strip()]
         p = new_planta(
             request.form.get("name", "").strip(),
             request.form.get("site", "").strip(),
@@ -1797,11 +1934,32 @@ def new_planta_view():
             request.form.get("owner", "").strip(),
             request.form.get("problem", "").strip(),
             area=request.form.get("area", "Logística"),
+            pais=request.form.get("pais", "").strip(),
+            areas=areas_list,
         )
         plantas.append(p)
         save_plantas(plantas)
         return redirect(url_for("planta_overview", pid=p["id"]))
-    return render_template("planta_form.html")
+    return render_template("planta_form.html", old={})
+
+
+@app.route("/planta/<pid>/edit", methods=["GET", "POST"])
+@login_required
+def edit_planta_view(pid):
+    plantas, p = get_planta_or_404(pid)
+    if request.method == "POST":
+        areas_raw = request.form.get("areas", "").strip()
+        p["areas"] = [a.strip() for a in areas_raw.split(",") if a.strip()]
+        p["name"] = request.form.get("name", "").strip() or p["name"]
+        p["site"] = request.form.get("site", "").strip()
+        p["customer"] = request.form.get("customer", "").strip()
+        p["owner"] = request.form.get("owner", "").strip()
+        p["problem"] = request.form.get("problem", "").strip()
+        p["area"] = request.form.get("area", p.get("area", "Logística"))
+        p["pais"] = request.form.get("pais", "").strip()
+        touch_and_save(plantas, p)
+        return redirect(url_for("planta_overview", pid=pid))
+    return render_template("planta_form.html", old=p)
 
 
 @app.route("/planta/<pid>/delete", methods=["POST"])
@@ -1924,7 +2082,7 @@ def hallazgo_form(pid):
             "due_date": request.form.get("due_date", "").strip(),
         }
         if not item["area"]:
-            return render_template("hallazgo_form.html", p=p, old=item, idx=idx, error=True)
+            return render_template("hallazgo_form.html", p=p, old=item, idx=idx, error=True, catalogo=load_catalogo())
         if idx is not None and old.get("evidencia"):
             item["evidencia"] = old["evidencia"]
 
@@ -1952,7 +2110,7 @@ def hallazgo_form(pid):
         plantas = load_plantas()
         touch_and_save(plantas, p)
         return redirect(url_for("planta_hallazgos", pid=pid))
-    return render_template("hallazgo_form.html", p=p, old=old, idx=idx, error=False)
+    return render_template("hallazgo_form.html", p=p, old=old, idx=idx, error=False, catalogo=load_catalogo())
 
 
 @app.route("/planta/<pid>/hallazgos/<int:idx>/delete", methods=["POST"])
@@ -1983,6 +2141,44 @@ def hallazgos_bulk_delete(pid):
     p["hallazgos"] = [h for i, h in enumerate(p.get("hallazgos", [])) if i not in idxs]
     touch_and_save(plantas, p)
     return redirect(url_for("planta_hallazgos", pid=pid))
+
+
+# ── Catálogo global de posibilidades (compartido entre todas las plantas) ──
+@app.route("/catalogo")
+@login_required
+def catalogo_view():
+    pid = request.args.get("pid", "")
+    catalogo = load_catalogo()
+    grouped = {f: [] for f in FASES}
+    for real_idx, c in enumerate(catalogo):
+        fase = c.get("fase")
+        if fase in grouped:
+            grouped[fase].append((real_idx, c))
+    return render_template("catalogo.html", grouped=grouped, pid=pid)
+
+
+@app.route("/catalogo/add", methods=["POST"])
+@login_required
+def catalogo_add():
+    pid = request.form.get("pid", "")
+    fase = request.form.get("fase", FASES[0])
+    descripcion = request.form.get("descripcion", "").strip()
+    if descripcion:
+        catalogo = load_catalogo()
+        catalogo.append({"fase": fase, "descripcion": descripcion})
+        save_catalogo(catalogo)
+    return redirect(url_for("catalogo_view", pid=pid))
+
+
+@app.route("/catalogo/<int:idx>/delete", methods=["POST"])
+@login_required
+def catalogo_delete(idx):
+    pid = request.args.get("pid", "") or request.form.get("pid", "")
+    catalogo = load_catalogo()
+    if 0 <= idx < len(catalogo):
+        catalogo.pop(idx)
+        save_catalogo(catalogo)
+    return redirect(url_for("catalogo_view", pid=pid))
 
 
 # ── Evidencias fotográficas ────────────────────────────────────────────────

@@ -1,5 +1,6 @@
-Flask==3.0.3
-gunicorn==22.0.0
-openpyxl==3.1.5
-reportlab==4.2.2
-Werkzeug==3.0.3
+{% extends 'base.html' %}
+{% block content %}
+<header class="page-head"><div><h1>Plantas y Áreas</h1><p>Administra países, plantas y áreas disponibles para auditorías.</p></div></header>
+<form class="card form" method="post"><h2>Agregar / editar planta</h2><div class="form-grid"><label>País<input name="pais" required></label><label>Planta<input name="planta" required></label><label class="wide">Áreas separadas por coma<input name="areas" placeholder="Inbound, Packing, Outbound" required></label></div><button class="btn blue submit">💾 Guardar</button></form>
+<section class="card"><h2>Plantas registradas</h2><div class="table-wrap"><table><thead><tr><th>País</th><th>Planta</th><th>Áreas</th><th>Nº</th><th>Acción</th></tr></thead><tbody>{% for p in plantas %}<tr><td>{{p.pais}}</td><td>{{p.planta}}</td><td>{{p.areas|join(', ')}}</td><td>{{p.areas|length}}</td><td><form method="post" action="{{ url_for('delete_planta') }}"><input type="hidden" name="pais" value="{{p.pais}}"><input type="hidden" name="planta" value="{{p.planta}}"><button class="mini danger">Eliminar</button></form></td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

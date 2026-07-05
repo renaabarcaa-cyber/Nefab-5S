@@ -1,5 +1,10 @@
-{% extends 'base.html' %}
-{% block content %}
-<header class="page-head"><div><h1>Cronograma de Seguimiento</h1><p>Vista simple de acciones abiertas, en progreso y cerradas.</p></div></header>
-<section class="card"><h2>Gantt semanal / seguimiento</h2><div class="timeline">{% for t in tickets|sort(attribute='fecha_compromiso') %}<div class="time-item {{t.estado|replace(' ','-')|lower}}"><div><b>{{t.fecha_compromiso or 'Sin fecha'}}</b><span>{{t.fase}}</span></div><p>{{t.descripcion}}</p><small>Responsable: {{t.responsable}} · Estado: {{t.estado}}</small></div>{% else %}<p>Sin tickets registrados.</p>{% endfor %}</div></section>
-{% endblock %}
+services:
+  - type: web
+    name: nefab-5s-web
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 60
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9

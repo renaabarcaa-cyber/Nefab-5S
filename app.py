@@ -2910,6 +2910,24 @@ def _pdf_safe(text):
         return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
+def _pdf_wrap_long_words(text, max_word_len=35):
+    """fpdf2 lanza una excepcion (FPDFException) si una 'palabra' sin
+    espacios es mas ancha que la linea disponible en multi_cell. Esto pasa
+    facilmente con texto libre (ej. 'Problema / Alcance' escrito sin
+    espacios, o una URL). Insertamos espacios cada N caracteres dentro de
+    cualquier palabra demasiado larga para que siempre pueda partirse."""
+    text = _pdf_safe(text)
+    words = text.split(" ")
+    out_words = []
+    for w in words:
+        if len(w) > max_word_len:
+            chunks = [w[i:i + max_word_len] for i in range(0, len(w), max_word_len)]
+            out_words.append(" ".join(chunks))
+        else:
+            out_words.append(w)
+    return " ".join(out_words)
+
+
 def _pdf_truncate(text, max_chars):
     text = _pdf_safe(text)
     if len(text) > max_chars:
@@ -3004,7 +3022,7 @@ def generate_pdf_report(p):
         pdf.set_font("Helvetica", "B", 9)
         pdf.cell(45, 6, _pdf_safe(label), 0, 0)
         pdf.set_font("Helvetica", "", 9)
-        pdf.multi_cell(0, 6, _pdf_safe(value))
+        pdf.multi_cell(0, 6, _pdf_wrap_long_words(value))
     pdf.ln(3)
 
     stats = planta_stats(p)
@@ -3049,17 +3067,60 @@ def generate_pdf_report(p):
 
     auditorias = p.get("auditorias", [])
     if auditorias:
-        pdf.add_page(orientation="L")
+        pdf.add_page(orientation="P")
         _pdf_header(pdf, "Auditorías 5S")
-        widths = [22, 30, 30] + [25] * 5 + [18, 20, 62]
-        headers = ["Fecha", "Zona/Área", "Auditor"] + PILLARS + ["% Gen.", "Result.", "Observaciones"]
-        _pdf_table_row(pdf, headers, widths, header=True)
-        for i, a in enumerate(auditorias):
+        card_w, card_h, gap = 190, 28, 4
+        for a in auditorias:
             clas = a.get("clasificacion") or clasificacion_pct(audit_avg(a))
-            row = [a.get("fecha", ""), a.get("area", ""), a.get("auditor", "")] \
-                + [str(a.get(f"pct_{pil}", "")) for pil in PILLARS] \
-                + [str(audit_avg(a)), clas, a.get("notes", "")]
-            _pdf_table_row(pdf, row, widths, fill=(245, 247, 250) if i % 2 else None)
+            clas_color = _PDF_GREEN if clas == "Bueno" else (_PDF_ORANGE if clas == "Regular" else _PDF_RED)
+            y0 = pdf.get_y()
+            if y0 + card_h > 275:
+                pdf.add_page(orientation="P")
+                _pdf_header(pdf, "Auditorías 5S (cont.)")
+                y0 = pdf.get_y()
+
+            pdf.set_draw_color(225, 229, 235)
+            pdf.set_fill_color(250, 251, 253)
+            pdf.rect(10, y0, card_w, card_h, "DF")
+
+            # Encabezado: Área — País ................ Auditor | Fecha
+            pdf.set_xy(13, y0 + 3)
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(110, 6, _pdf_truncate(f"{a.get('area','') or '-'} — {p.get('pais','') or '-'}", 42), 0, 0)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*_PDF_GRAY)
+            pdf.set_xy(123, y0 + 3)
+            pdf.cell(64, 6, _pdf_truncate(f"Auditor: {a.get('auditor','-') or '-'} | {a.get('fecha','')}", 42), 0, 0, "R")
+            pdf.set_text_color(0, 0, 0)
+
+            # % General, grande, a la izquierda
+            pdf.set_xy(13, y0 + 11)
+            pdf.set_font("Helvetica", "B", 17)
+            pdf.set_text_color(*clas_color)
+            pdf.cell(32, 10, f"{audit_avg(a)}%", 0, 0)
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_xy(13, y0 + 21)
+            pdf.set_text_color(*_PDF_GRAY)
+            pdf.cell(32, 5, "General", 0, 0)
+            pdf.set_text_color(0, 0, 0)
+
+            # Los 5 pilares, en columnas
+            x = 50
+            col_w = (card_w - 40) / len(PILLARS)
+            for pil in PILLARS:
+                val = a.get(f"pct_{pil}", 0)
+                pdf.set_xy(x, y0 + 11)
+                pdf.set_font("Helvetica", "B", 11)
+                pdf.cell(col_w, 6, f"{val}%", 0, 0, "C")
+                pdf.set_xy(x, y0 + 18)
+                pdf.set_font("Helvetica", "", 7)
+                pdf.set_text_color(*_PDF_GRAY)
+                pdf.cell(col_w, 5, pil, 0, 0, "C")
+                pdf.set_text_color(0, 0, 0)
+                x += col_w
+
+            pdf.set_y(y0 + card_h + gap)
 
     hallazgos = p.get("hallazgos", [])
     if hallazgos:
@@ -3097,7 +3158,7 @@ def generate_pdf_report(p):
                 pass
             pdf.set_xy(x, y + col_h - 11)
             pdf.set_font("Helvetica", "", 8)
-            pdf.multi_cell(col_w, 4, _pdf_truncate(ev.get("caption", "") or "-", 60))
+            pdf.multi_cell(col_w, 4, _pdf_wrap_long_words(_pdf_truncate(ev.get("caption", "") or "-", 60), max_word_len=18))
             x += col_w + 10
 
     try:
@@ -3121,6 +3182,14 @@ def planta_report_pdf(pid):
         return Response(
             "Falta instalar fpdf2. En Pydroid 3: menu Pip -> busca 'fpdf2' -> instala. "
             "En PC: pip install fpdf2",
+            status=500,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response(
+            "No se pudo generar el PDF de esta planta. Se registró el detalle en los "
+            "logs del servidor para revisarlo. Error: " + _pdf_safe(str(e)),
             status=500,
         )
     safe_name = "".join(c for c in p.get("name", "5s") if c.isalnum() or c in " _-").strip() or "5s"

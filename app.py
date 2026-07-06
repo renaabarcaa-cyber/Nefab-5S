@@ -1952,13 +1952,411 @@ def _resolve_data_dir():
 
 DATA_DIR = _resolve_data_dir()
 PLANTAS_FILE = DATA_DIR / "plantas_5s.json"
+DB_FILE = DATA_DIR / "nefab5s.db"
 PHOTOS_DIR = DATA_DIR / "photos"
 PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_PHOTO_EXT = {"jpg", "jpeg", "png", "gif", "webp", "heic", "heif"}
 
+# ── Persistencia SQLite ──────────────────────────────────────────────────
+# Reemplaza el JSON de archivo unico para plantas/auditorias/hallazgos/
+# evidencia: cada guardado ahora es una fila individual (INSERT/UPDATE/
+# DELETE), evitando que dos personas guardando casi al mismo tiempo en la
+# misma planta se pisen los cambios entre si.
+import sqlite3
+
+_HALLAZGO_COLS = ["date", "area", "pillar", "description", "severity", "status",
+                  "corrective_action", "responsible", "due_date", "evidencia"]
+_AUDIT_FLAT_COLS = (["fecha", "area", "auditor", "notes", "pct_total", "clasificacion", "evidencia"]
+                     + [f"pct_{pil}" for pil in PILLARS])
+
+
+def get_db():
+    conn = sqlite3.connect(str(DB_FILE), timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    return conn
+
+
+def init_db():
+    audit_pct_cols = ",".join(f"pct_{pil} REAL" for pil in PILLARS)
+    conn = get_db()
+    conn.executescript(f"""
+        CREATE TABLE IF NOT EXISTS plantas (
+            id TEXT PRIMARY KEY, name TEXT, site TEXT, customer TEXT, owner TEXT,
+            problem TEXT, area TEXT, pais TEXT, areas_json TEXT,
+            created_at TEXT, updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS auditorias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+            fecha TEXT, area TEXT, auditor TEXT, respuestas_json TEXT, notes TEXT,
+            pct_total REAL, {audit_pct_cols}, clasificacion TEXT, evidencia TEXT
+        );
+        CREATE TABLE IF NOT EXISTS hallazgos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+            date TEXT, area TEXT, pillar TEXT, description TEXT, severity TEXT, status TEXT,
+            corrective_action TEXT, responsible TEXT, due_date TEXT, evidencia TEXT
+        );
+        CREATE TABLE IF NOT EXISTS evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+            filename TEXT, caption TEXT, date TEXT
+        );
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY, email TEXT, password_hash TEXT, role TEXT
+        );
+        CREATE TABLE IF NOT EXISTS catalogo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, fase TEXT, descripcion TEXT
+        );
+        CREATE TABLE IF NOT EXISTS paises_plantas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, pais TEXT, planta TEXT, areas_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_auditorias_pid ON auditorias(planta_id);
+        CREATE INDEX IF NOT EXISTS idx_hallazgos_pid ON hallazgos(planta_id);
+        CREATE INDEX IF NOT EXISTS idx_evidence_pid ON evidence(planta_id);
+    """)
+    conn.commit()
+    conn.close()
+
+
+def migrate_json_to_sqlite_if_needed():
+    """Migracion unica: si SQLite esta vacio y existen los JSON viejos,
+    importa todo para no perder datos ya guardados en produccion."""
+    conn = get_db()
+    existing = conn.execute("SELECT COUNT(*) AS c FROM plantas").fetchone()["c"]
+    conn.close()
+    if existing > 0 or not PLANTAS_FILE.exists():
+        pass
+    else:
+        try:
+            old_plantas = json.loads(PLANTAS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            old_plantas = []
+        conn = get_db()
+        for p in old_plantas:
+            conn.execute(
+                "INSERT OR IGNORE INTO plantas (id,name,site,customer,owner,problem,area,pais,areas_json,"
+                "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (p.get("id"), p.get("name", ""), p.get("site", ""), p.get("customer", ""), p.get("owner", ""),
+                 p.get("problem", ""), p.get("area", "Logística"), p.get("pais", ""),
+                 json.dumps(p.get("areas", [])), p.get("created_at", ""), p.get("updated_at", "")),
+            )
+            for a in p.get("auditorias", []):
+                cols = _AUDIT_FLAT_COLS + ["respuestas_json"]
+                vals = [a.get(c, "") for c in _AUDIT_FLAT_COLS] + [json.dumps(a.get("respuestas", []))]
+                conn.execute(
+                    f"INSERT INTO auditorias (planta_id,{','.join(cols)}) VALUES (?,{','.join('?' * len(cols))})",
+                    (p.get("id"), *vals),
+                )
+            for h in p.get("hallazgos", []):
+                conn.execute(
+                    f"INSERT INTO hallazgos (planta_id,{','.join(_HALLAZGO_COLS)}) "
+                    f"VALUES (?,{','.join('?' * len(_HALLAZGO_COLS))})",
+                    (p.get("id"), *[h.get(c, "") for c in _HALLAZGO_COLS]),
+                )
+            for ev in p.get("evidence", []):
+                conn.execute(
+                    "INSERT INTO evidence (planta_id,filename,caption,date) VALUES (?,?,?,?)",
+                    (p.get("id"), ev.get("filename", ""), ev.get("caption", ""), ev.get("date", "")),
+                )
+        conn.commit()
+        conn.close()
+        print(f"[Migración] {len(old_plantas)} planta(s) importada(s) de JSON a SQLite ({DB_FILE})")
+
+    # Usuarios, catalogo y paises_plantas (migracion independiente, uno por uno)
+    conn = get_db()
+    has_users = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
+    conn.close()
+    old_users_file = DATA_DIR / "usuarios_5s.json"
+    if has_users == 0 and old_users_file.exists():
+        try:
+            old_users = json.loads(old_users_file.read_text(encoding="utf-8"))
+            conn = get_db()
+            for u in old_users:
+                conn.execute("INSERT OR IGNORE INTO users (id,email,password_hash,role) VALUES (?,?,?,?)",
+                             (u.get("id"), u.get("email"), u.get("password_hash"), u.get("role", "user")))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    conn = get_db()
+    has_cat = conn.execute("SELECT COUNT(*) c FROM catalogo").fetchone()["c"]
+    conn.close()
+    old_cat_file = DATA_DIR / "catalogo_5s.json"
+    if has_cat == 0 and old_cat_file.exists():
+        try:
+            old_cat = json.loads(old_cat_file.read_text(encoding="utf-8"))
+            conn = get_db()
+            for c in old_cat:
+                conn.execute("INSERT INTO catalogo (fase,descripcion) VALUES (?,?)",
+                             (c.get("fase", ""), c.get("descripcion", "")))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    conn = get_db()
+    has_pp = conn.execute("SELECT COUNT(*) c FROM paises_plantas").fetchone()["c"]
+    conn.close()
+    old_pp_file = DATA_DIR / "paises_plantas.json"
+    if has_pp == 0 and old_pp_file.exists():
+        try:
+            old_pp = json.loads(old_pp_file.read_text(encoding="utf-8"))
+            conn = get_db()
+            for r in old_pp:
+                conn.execute("INSERT INTO paises_plantas (pais,planta,areas_json) VALUES (?,?,?)",
+                             (r.get("pais", ""), r.get("planta", ""), json.dumps(r.get("areas", []))))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+
+def _nth_row_id(conn, table, pid, idx, pid_col="planta_id"):
+    row = conn.execute(
+        f"SELECT id FROM {table} WHERE {pid_col}=? ORDER BY id LIMIT 1 OFFSET ?", (pid, idx)
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def touch_planta_db(pid):
+    conn = get_db()
+    conn.execute("UPDATE plantas SET updated_at=? WHERE id=?",
+                 (datetime.now().strftime("%d/%m/%Y %H:%M"), pid))
+    conn.commit()
+    conn.close()
+
+
+def get_planta_dict(pid):
+    conn = get_db()
+    prow = conn.execute("SELECT * FROM plantas WHERE id=?", (pid,)).fetchone()
+    if not prow:
+        conn.close()
+        return None
+    p = dict(prow)
+    p["areas"] = json.loads(p.pop("areas_json") or "[]")
+    auditorias = []
+    for r in conn.execute("SELECT * FROM auditorias WHERE planta_id=? ORDER BY id", (pid,)):
+        d = dict(r)
+        d["respuestas"] = json.loads(d.pop("respuestas_json") or "[]")
+        auditorias.append(d)
+    p["auditorias"] = auditorias
+    p["hallazgos"] = [dict(r) for r in conn.execute(
+        "SELECT * FROM hallazgos WHERE planta_id=? ORDER BY id", (pid,))]
+    p["evidence"] = [dict(r) for r in conn.execute(
+        "SELECT * FROM evidence WHERE planta_id=? ORDER BY id", (pid,))]
+    conn.close()
+    return p
+
+
+def load_plantas():
+    conn = get_db()
+    ids = [r["id"] for r in conn.execute("SELECT id FROM plantas ORDER BY rowid ASC")]
+    conn.close()
+    return [get_planta_dict(pid) for pid in ids]
+
+
+def create_planta_db(name, site, customer, owner, problem, area="Logística", pais="", areas=None):
+    pid = gen_id()
+    now = date.today().isoformat()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO plantas (id,name,site,customer,owner,problem,area,pais,areas_json,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (pid, name or "Nueva planta 5S", site, customer, owner, problem,
+         area if area in AREAS else "Logística", pais or "", json.dumps(areas or []), now, now),
+    )
+    conn.commit()
+    conn.close()
+    return pid
+
+
+def update_planta_db(pid, name, site, customer, owner, problem, area, pais, areas):
+    conn = get_db()
+    conn.execute(
+        "UPDATE plantas SET name=?,site=?,customer=?,owner=?,problem=?,area=?,pais=?,areas_json=?,updated_at=? "
+        "WHERE id=?",
+        (name, site, customer, owner, problem, area, pais, json.dumps(areas or []),
+         datetime.now().strftime("%d/%m/%Y %H:%M"), pid),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_planta_db(pid):
+    conn = get_db()
+    for table in ("auditorias", "hallazgos", "evidence"):
+        conn.execute(f"DELETE FROM {table} WHERE planta_id=?", (pid,))
+    conn.execute("DELETE FROM plantas WHERE id=?", (pid,))
+    conn.commit()
+    conn.close()
+
+
+def add_auditoria_db(pid, item):
+    conn = get_db()
+    cols = _AUDIT_FLAT_COLS + ["respuestas_json"]
+    vals = [item.get(c, "") for c in _AUDIT_FLAT_COLS] + [json.dumps(item.get("respuestas", []))]
+    placeholders = ",".join("?" * (len(cols) + 1))
+    conn.execute(f"INSERT INTO auditorias (planta_id,{','.join(cols)}) VALUES ({placeholders})", (pid, *vals))
+    conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def update_auditoria_db(pid, idx, item):
+    conn = get_db()
+    real_id = _nth_row_id(conn, "auditorias", pid, idx)
+    if real_id is not None:
+        cols = _AUDIT_FLAT_COLS + ["respuestas_json"]
+        vals = [item.get(c, "") for c in _AUDIT_FLAT_COLS] + [json.dumps(item.get("respuestas", []))]
+        set_clause = ",".join(f"{c}=?" for c in cols)
+        conn.execute(f"UPDATE auditorias SET {set_clause} WHERE id=?", (*vals, real_id))
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def delete_auditoria_db(pid, idx):
+    conn = get_db()
+    real_id = _nth_row_id(conn, "auditorias", pid, idx)
+    if real_id is not None:
+        conn.execute("DELETE FROM auditorias WHERE id=?", (real_id,))
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def add_hallazgo_db(pid, item):
+    conn = get_db()
+    placeholders = ",".join("?" * (len(_HALLAZGO_COLS) + 1))
+    conn.execute(f"INSERT INTO hallazgos (planta_id,{','.join(_HALLAZGO_COLS)}) VALUES ({placeholders})",
+                 (pid, *[item.get(c, "") for c in _HALLAZGO_COLS]))
+    conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def update_hallazgo_db(pid, idx, item):
+    conn = get_db()
+    real_id = _nth_row_id(conn, "hallazgos", pid, idx)
+    if real_id is not None:
+        set_clause = ",".join(f"{c}=?" for c in _HALLAZGO_COLS)
+        conn.execute(f"UPDATE hallazgos SET {set_clause} WHERE id=?",
+                     (*[item.get(c, "") for c in _HALLAZGO_COLS], real_id))
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def delete_hallazgo_db(pid, idx):
+    conn = get_db()
+    real_id = _nth_row_id(conn, "hallazgos", pid, idx)
+    if real_id is not None:
+        conn.execute("DELETE FROM hallazgos WHERE id=?", (real_id,))
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def close_hallazgo_db(pid, idx):
+    conn = get_db()
+    real_id = _nth_row_id(conn, "hallazgos", pid, idx)
+    if real_id is not None:
+        conn.execute("UPDATE hallazgos SET status='Cerrado' WHERE id=?", (real_id,))
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def bulk_delete_hallazgos_db(pid, idxs):
+    conn = get_db()
+    rows = conn.execute("SELECT id FROM hallazgos WHERE planta_id=? ORDER BY id", (pid,)).fetchall()
+    ids_to_delete = [rows[i]["id"] for i in idxs if 0 <= i < len(rows)]
+    if ids_to_delete:
+        placeholders = ",".join("?" * len(ids_to_delete))
+        conn.execute(f"DELETE FROM hallazgos WHERE id IN ({placeholders})", ids_to_delete)
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def add_evidence_db(pid, filename, caption, ev_date):
+    conn = get_db()
+    conn.execute("INSERT INTO evidence (planta_id,filename,caption,date) VALUES (?,?,?,?)",
+                 (pid, filename, caption, ev_date))
+    conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def delete_evidence_db(pid, filename):
+    conn = get_db()
+    conn.execute("DELETE FROM evidence WHERE planta_id=? AND filename=?", (pid, filename))
+    conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def load_users():
+    conn = get_db()
+    users = [dict(r) for r in conn.execute("SELECT * FROM users ORDER BY rowid ASC")]
+    conn.close()
+    return users
+
+
+def save_users(users):
+    conn = get_db()
+    conn.execute("DELETE FROM users")
+    for u in users:
+        conn.execute("INSERT INTO users (id,email,password_hash,role) VALUES (?,?,?,?)",
+                     (u["id"], u["email"], u["password_hash"], u.get("role", "user")))
+    conn.commit()
+    conn.close()
+
+
+def load_catalogo():
+    conn = get_db()
+    rows = [dict(r) for r in conn.execute("SELECT fase, descripcion FROM catalogo ORDER BY rowid ASC")]
+    conn.close()
+    return rows if rows else DEFAULT_CATALOGO
+
+
+def save_catalogo(data):
+    conn = get_db()
+    conn.execute("DELETE FROM catalogo")
+    for c in data:
+        conn.execute("INSERT INTO catalogo (fase,descripcion) VALUES (?,?)",
+                     (c.get("fase", ""), c.get("descripcion", "")))
+    conn.commit()
+    conn.close()
+
+
+def load_paises_plantas():
+    conn = get_db()
+    rows = []
+    for r in conn.execute("SELECT * FROM paises_plantas ORDER BY rowid ASC"):
+        d = dict(r)
+        d["areas"] = json.loads(d.pop("areas_json") or "[]")
+        rows.append(d)
+    conn.close()
+    return rows
+
+
+def save_paises_plantas(data):
+    conn = get_db()
+    conn.execute("DELETE FROM paises_plantas")
+    for r in data:
+        conn.execute("INSERT INTO paises_plantas (pais,planta,areas_json) VALUES (?,?,?)",
+                     (r.get("pais", ""), r.get("planta", ""), json.dumps(r.get("areas", []))))
+    conn.commit()
+    conn.close()
+
 app = Flask(__name__)
 app.jinja_loader = DictLoader(TEMPLATES)
 app.secret_key = os.environ.get("SECRET_KEY", "nefab-5s-web-dev-only")
+
+init_db()
+migrate_json_to_sqlite_if_needed()
 
 
 app.jinja_env.globals.update(
@@ -1982,71 +2380,8 @@ def logo_png():
 
 
 # ── Usuarios y sesión (login + roles admin/usuario) ─────────────────────────
-USERS_FILE = DATA_DIR / "usuarios_5s.json"
-CATALOGO_FILE = DATA_DIR / "catalogo_5s.json"
-_users_lock = threading.Lock()
-_catalogo_lock = threading.Lock()
-
-
-def load_catalogo():
-    with _catalogo_lock:
-        if CATALOGO_FILE.exists():
-            try:
-                data = json.loads(CATALOGO_FILE.read_text(encoding="utf-8"))
-                return data if data else DEFAULT_CATALOGO
-            except Exception:
-                return DEFAULT_CATALOGO
-        return DEFAULT_CATALOGO
-
-
-def save_catalogo(data):
-    with _catalogo_lock:
-        tmp_file = CATALOGO_FILE.with_suffix(".tmp")
-        tmp_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp_file.replace(CATALOGO_FILE)
-
-
-PAISES_PLANTAS_FILE = DATA_DIR / "paises_plantas.json"
-_paises_plantas_lock = threading.Lock()
-
-
-def load_paises_plantas():
-    with _paises_plantas_lock:
-        if PAISES_PLANTAS_FILE.exists():
-            try:
-                return json.loads(PAISES_PLANTAS_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                return []
-        return []
-
-
-def save_paises_plantas(data):
-    with _paises_plantas_lock:
-        tmp_file = PAISES_PLANTAS_FILE.with_suffix(".tmp")
-        tmp_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp_file.replace(PAISES_PLANTAS_FILE)
-
-
-_plantas_lock = threading.Lock()
-
-
-def load_users():
-    with _users_lock:
-        if USERS_FILE.exists():
-            try:
-                return json.loads(USERS_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                return []
-        return []
-
-
-def save_users(users):
-    with _users_lock:
-        tmp_file = USERS_FILE.with_suffix(".tmp")
-        tmp_file.write_text(json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp_file.replace(USERS_FILE)
-
-
+# Nota: load_users/save_users/load_catalogo/save_catalogo/load_paises_plantas/
+# save_paises_plantas ya estan definidos mas arriba (backend SQLite).
 def get_user_by_id(uid):
     return next((u for u in load_users() if u["id"] == uid), None)
 
@@ -2210,38 +2545,8 @@ def set_lang(lang):
     return redirect(request.referrer or url_for("plantas_list"))
 
 
-# ── Persistencia de plantas 5S ──────────────────────────────────────────────
-def load_plantas():
-    with _plantas_lock:
-        if PLANTAS_FILE.exists():
-            try:
-                return json.loads(PLANTAS_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                try:
-                    backup = PLANTAS_FILE.with_suffix(".corrupto.bak")
-                    PLANTAS_FILE.replace(backup)
-                    print(f"[Aviso] plantas_5s.json estaba corrupto, respaldado en: {backup}")
-                except Exception:
-                    pass
-                return []
-        return []
-
-
-def save_plantas(plantas):
-    with _plantas_lock:
-        tmp_file = PLANTAS_FILE.with_suffix(".tmp")
-        tmp_file.write_text(json.dumps(plantas, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp_file.replace(PLANTAS_FILE)
-
-
-def touch_and_save(plantas, p):
-    p["updated_at"] = datetime.now().strftime("%d/%m/%Y %H:%M")
-    for i, pr in enumerate(plantas):
-        if pr["id"] == p["id"]:
-            plantas[i] = p
-    save_plantas(plantas)
-
-
+# ── Nota: load_plantas/get_planta_dict/create_planta_db/etc. ya estan
+# definidos mas arriba (backend SQLite).
 def all_hallazgos_flat():
     """Aplana los hallazgos de todas las plantas en una sola lista, con
     pais/planta/planta_id agregados, para el Cronograma global."""
@@ -2257,23 +2562,11 @@ def all_hallazgos_flat():
     return out
 
 
-def new_planta(name, site, customer, owner, problem, area="Logística", pais="", areas=None):
-    return {
-        "id": gen_id(), "name": name or "Nueva planta 5S", "site": site or "",
-        "customer": customer or "", "owner": owner or "", "problem": problem or "",
-        "area": area if area in AREAS else "Logística",
-        "pais": pais or "", "areas": areas or [],
-        "created_at": date.today().isoformat(),
-        "auditorias": [], "hallazgos": [], "evidence": [],
-    }
-
-
 def get_planta_or_404(pid):
-    plantas = load_plantas()
-    p = next((x for x in plantas if x["id"] == pid), None)
+    p = get_planta_dict(pid)
     if not p:
         abort(404)
-    return plantas, p
+    return None, p
 
 
 def to_num(v):
@@ -2401,10 +2694,9 @@ def plantas_list():
 @login_required
 def new_planta_view():
     if request.method == "POST":
-        plantas = load_plantas()
         areas_raw = request.form.get("areas", "").strip()
         areas_list = [a.strip() for a in areas_raw.split(",") if a.strip()]
-        p = new_planta(
+        pid = create_planta_db(
             request.form.get("name", "").strip(),
             request.form.get("site", "").strip(),
             request.form.get("customer", "").strip(),
@@ -2414,27 +2706,28 @@ def new_planta_view():
             pais=request.form.get("pais", "").strip(),
             areas=areas_list,
         )
-        plantas.append(p)
-        save_plantas(plantas)
-        return redirect(url_for("planta_overview", pid=p["id"]))
+        return redirect(url_for("planta_overview", pid=pid))
     return render_template("planta_form.html", old={}, registro=load_paises_plantas())
 
 
 @app.route("/planta/<pid>/edit", methods=["GET", "POST"])
 @login_required
 def edit_planta_view(pid):
-    plantas, p = get_planta_or_404(pid)
+    _, p = get_planta_or_404(pid)
     if request.method == "POST":
         areas_raw = request.form.get("areas", "").strip()
-        p["areas"] = [a.strip() for a in areas_raw.split(",") if a.strip()]
-        p["name"] = request.form.get("name", "").strip() or p["name"]
-        p["site"] = request.form.get("site", "").strip()
-        p["customer"] = request.form.get("customer", "").strip()
-        p["owner"] = request.form.get("owner", "").strip()
-        p["problem"] = request.form.get("problem", "").strip()
-        p["area"] = request.form.get("area", p.get("area", "Logística"))
-        p["pais"] = request.form.get("pais", "").strip()
-        touch_and_save(plantas, p)
+        areas_list = [a.strip() for a in areas_raw.split(",") if a.strip()]
+        update_planta_db(
+            pid,
+            request.form.get("name", "").strip() or p["name"],
+            request.form.get("site", "").strip(),
+            request.form.get("customer", "").strip(),
+            request.form.get("owner", "").strip(),
+            request.form.get("problem", "").strip(),
+            request.form.get("area", p.get("area", "Logística")),
+            request.form.get("pais", "").strip(),
+            areas_list,
+        )
         return redirect(url_for("planta_overview", pid=pid))
     return render_template("planta_form.html", old=p, registro=load_paises_plantas())
 
@@ -2442,9 +2735,7 @@ def edit_planta_view(pid):
 @app.route("/planta/<pid>/delete", methods=["POST"])
 @login_required
 def delete_planta(pid):
-    plantas = load_plantas()
-    plantas = [p for p in plantas if p["id"] != pid]
-    save_plantas(plantas)
+    delete_planta_db(pid)
     try:
         import shutil
         shutil.rmtree(PHOTOS_DIR / pid, ignore_errors=True)
@@ -2506,18 +2797,13 @@ def auditoria_form(pid):
                 )
                 file.save(str(planta_photo_dir / unique_name))
                 item["evidencia"] = unique_name
-                p.setdefault("evidence", []).append({
-                    "filename": unique_name,
-                    "caption": f"Auditoría {item['fecha']} — {item.get('area','')}",
-                    "date": date.today().isoformat(),
-                })
+                add_evidence_db(pid, unique_name, f"Auditoría {item['fecha']} — {item.get('area','')}",
+                                 date.today().isoformat())
 
         if idx is not None:
-            p["auditorias"][idx] = item
+            update_auditoria_db(pid, idx, item)
         else:
-            p["auditorias"].append(item)
-        plantas = load_plantas()
-        touch_and_save(plantas, p)
+            add_auditoria_db(pid, item)
         return redirect(url_for("planta_auditorias", pid=pid))
     return render_template("auditoria_form.html", p=p, old=old, idx=idx)
 
@@ -2525,10 +2811,7 @@ def auditoria_form(pid):
 @app.route("/planta/<pid>/auditorias/<int:idx>/delete", methods=["POST"])
 @login_required
 def auditoria_delete(pid, idx):
-    plantas, p = get_planta_or_404(pid)
-    if 0 <= idx < len(p["auditorias"]):
-        p["auditorias"].pop(idx)
-        touch_and_save(plantas, p)
+    delete_auditoria_db(pid, idx)
     return redirect(url_for("planta_auditorias", pid=pid))
 
 
@@ -2574,18 +2857,14 @@ def hallazgo_form(pid):
                 )
                 file.save(str(planta_photo_dir / unique_name))
                 item["evidencia"] = unique_name
-                p.setdefault("evidence", []).append({
-                    "filename": unique_name,
-                    "caption": f"Hallazgo — {item.get('area','')}: {item.get('description','')[:60]}",
-                    "date": date.today().isoformat(),
-                })
+                add_evidence_db(pid, unique_name,
+                                 f"Hallazgo — {item.get('area','')}: {item.get('description','')[:60]}",
+                                 date.today().isoformat())
 
         if idx is not None:
-            p["hallazgos"][idx] = item
+            update_hallazgo_db(pid, idx, item)
         else:
-            p["hallazgos"].append(item)
-        plantas = load_plantas()
-        touch_and_save(plantas, p)
+            add_hallazgo_db(pid, item)
         return redirect(url_for("planta_hallazgos", pid=pid))
     return render_template("hallazgo_form.html", p=p, old=old, idx=idx, error=False, catalogo=load_catalogo())
 
@@ -2593,30 +2872,22 @@ def hallazgo_form(pid):
 @app.route("/planta/<pid>/hallazgos/<int:idx>/delete", methods=["POST"])
 @login_required
 def hallazgo_delete(pid, idx):
-    plantas, p = get_planta_or_404(pid)
-    if 0 <= idx < len(p["hallazgos"]):
-        p["hallazgos"].pop(idx)
-        touch_and_save(plantas, p)
+    delete_hallazgo_db(pid, idx)
     return redirect(url_for("planta_hallazgos", pid=pid))
 
 
 @app.route("/planta/<pid>/hallazgos/<int:idx>/close", methods=["POST"])
 @login_required
 def hallazgo_close(pid, idx):
-    plantas, p = get_planta_or_404(pid)
-    if 0 <= idx < len(p["hallazgos"]):
-        p["hallazgos"][idx]["status"] = "Cerrado"
-        touch_and_save(plantas, p)
+    close_hallazgo_db(pid, idx)
     return redirect(url_for("planta_hallazgos", pid=pid))
 
 
 @app.route("/planta/<pid>/hallazgos/bulk_delete", methods=["POST"])
 @login_required
 def hallazgos_bulk_delete(pid):
-    plantas, p = get_planta_or_404(pid)
     idxs = {int(i) for i in request.form.getlist("idx")}
-    p["hallazgos"] = [h for i, h in enumerate(p.get("hallazgos", [])) if i not in idxs]
-    touch_and_save(plantas, p)
+    bulk_delete_hallazgos_db(pid, idxs)
     return redirect(url_for("planta_hallazgos", pid=pid))
 
 
@@ -2800,7 +3071,6 @@ def planta_evidencia(pid):
 @app.route("/planta/<pid>/evidencia/upload", methods=["POST"])
 @login_required
 def evidencia_upload(pid):
-    plantas, p = get_planta_or_404(pid)
     file = request.files.get("photo")
     if not file or not file.filename:
         return redirect(url_for("planta_evidencia", pid=pid))
@@ -2816,12 +3086,7 @@ def evidencia_upload(pid):
     safe_name = secure_filename(unique_name)
     file.save(str(planta_photo_dir / safe_name))
 
-    p.setdefault("evidence", []).append({
-        "filename": safe_name,
-        "caption": request.form.get("caption", "").strip(),
-        "date": date.today().isoformat(),
-    })
-    touch_and_save(plantas, p)
+    add_evidence_db(pid, safe_name, request.form.get("caption", "").strip(), date.today().isoformat())
     return redirect(url_for("planta_evidencia", pid=pid))
 
 
@@ -2838,10 +3103,8 @@ def evidencia_photo(pid, filename):
 @app.route("/planta/<pid>/evidencia/<filename>/delete", methods=["POST"])
 @login_required
 def evidencia_delete(pid, filename):
-    plantas, p = get_planta_or_404(pid)
     safe_name = secure_filename(filename)
-    p["evidence"] = [ev for ev in p.get("evidence", []) if ev.get("filename") != safe_name]
-    touch_and_save(plantas, p)
+    delete_evidence_db(pid, safe_name)
     try:
         (PHOTOS_DIR / pid / safe_name).unlink(missing_ok=True)
     except Exception:

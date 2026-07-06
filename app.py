@@ -111,7 +111,7 @@ SCORE_OPTIONS = [1, 2, 3, 4, 5]
 SEVERITIES = ["Alto", "Medio", "Bajo"]
 FINDING_STATUSES = ["Abierto", "En progreso", "Cerrado"]
 
-LANGUAGES = {"Español": "es", "English": "en"}
+LANGUAGES = {"Español": "es", "English": "en", "Português": "pt"}
 TRANSLATIONS = {
     "en": {
         "Plantas 5S": "5S Sites", "Plantas 5S Nefab": "Nefab 5S Sites", "Nueva planta": "New Site",
@@ -145,7 +145,7 @@ TRANSLATIONS = {
         "Campo requerido": "Required field",
         "opcional": "optional", "Evidencia fotográfica": "Photo evidence",
         "Puntaje por pilar": "Score by pillar", "Cerrar": "Close",
-        "Del catálogo": "From catalog", "Bueno": "Good", "Regular": "Fair", "Bajo": "Poor",
+        "Del catálogo": "From catalog",
         "Resultados de auditorías": "Audit results", "Hallazgos por fase": "Findings by pillar",
         "Estado de hallazgos": "Findings status", "Evidencia fotográfica reciente": "Recent photo evidence",
         "Fase 5S": "5S Pillar", "filtrado por fase": "filtered by pillar", "Selecciona": "Select",
@@ -157,8 +157,152 @@ TRANSLATIONS = {
         "Fecha desde": "Date from", "Fecha hasta": "Date to", "Rango rápido": "Quick range",
         "Todo": "All", "Aplicar": "Apply", "Gantt semanal": "Weekly Gantt",
         "Área": "Area", "Hallazgo": "Finding", "Semana actual": "Current week",
-        "Todas": "All", "Cronograma": "Schedule",
-    }
+        "Todas": "All", "Cronograma": "Schedule", "Fase": "Pillar", "Editar entrada": "Edit entry",
+        "Catálogo de Países y Plantas": "Countries and Sites Catalog",
+        "Registro maestro reutilizable al crear una planta o registrar una auditoría/hallazgo.":
+            "Reusable master registry when creating a site or logging an audit/finding.",
+        "Sin entradas.": "No entries.", "Agregar entrada": "Add entry", "Agregar": "Add", "Otro": "Other",
+        "¿Solo tiene lo que usa?": "Do you only have what you use?",
+        "¿Es de fácil acceso?": "Is it easily accessible?",
+        "¿Los elementos están identificados?": "Are items identified?",
+        "¿Todo está en el lugar correcto?": "Is everything in the right place?",
+        "¿El lugar está limpio?": "Is the place clean?",
+        "¿Los depósitos de basura contienen el tipo correcto?": "Do trash bins contain the correct type of waste?",
+        "¿Organización general según la norma?": "Overall organization according to standard?",
+        "¿Se usan y actualizan los tableros de anuncios?": "Are bulletin boards used and updated?",
+        "¿Se mantiene capacitación frecuente de 5S?": "Is frequent 5S training maintained?",
+        "¿Las 5S se implementan y se siguen?": "Are the 5S implemented and followed?",
+    },
+    "pt": {
+        "Plantas 5S": "Plantas 5S",
+        "Plantas 5S Nefab": "Plantas 5S Nefab",
+        "Nueva planta": "Nova planta",
+        "Nombre de la planta": "Nome da planta",
+        "Sitio / Operación": "Local / Operação",
+        "Cliente": "Cliente",
+        "Responsable": "Responsável",
+        "Área": "Área",
+        "Problema / Alcance": "Problema / Escopo",
+        "Cancelar": "Cancelar",
+        "Crear": "Criar",
+        "Guardar": "Salvar",
+        "Abrir": "Abrir",
+        "Eliminar": "Excluir",
+        "Total plantas": "Total de plantas",
+        "Logística": "Logística",
+        "Manufactura": "Manufatura",
+        "Todos": "Todos",
+        "Filtrar por área": "Filtrar por área",
+        "Sin plantas en esta área.": "Nenhuma planta nesta área.",
+        "Volver a plantas": "Voltar às plantas",
+        "Secciones de la planta": "Seções da planta",
+        "Inicio": "Painel",
+        "Auditorías": "Auditorias",
+        "Hallazgos": "Achados",
+        "Evidencias": "Evidências",
+        "Exportar": "Exportar",
+        "Salir": "Sair",
+        "Planta activa": "Planta ativa",
+        "Actualizado": "Atualizado",
+        "Guardado": "Salvo",
+        "Promedio general": "Média geral",
+        "Auditorías realizadas": "Auditorias realizadas",
+        "Hallazgos abiertos": "Achados abertos",
+        "Hallazgos cerrados": "Achados fechados",
+        "Promedio por pilar": "Média por pilar",
+        "Fecha": "Data",
+        "Auditor": "Auditor",
+        "Puntaje promedio": "Pontuação média",
+        "Observaciones": "Observações",
+        "Registro de auditorías": "Registro de auditorias",
+        "+ Nueva auditoría": "+ Nova auditoria",
+        "Registro de hallazgos": "Registro de achados",
+        "+ Nuevo hallazgo": "+ Novo achado",
+        "Zona / Área": "Zona / Área",
+        "Pilar": "Pilar",
+        "Descripción": "Descrição",
+        "Severidad": "Severidade",
+        "Acción correctiva": "Ação corretiva",
+        "Fecha compromiso": "Data limite",
+        "Estado": "Status",
+        "Alto": "Alto",
+        "Medio": "Médio",
+        "Bajo": "Baixo",
+        "Abierto": "Aberto",
+        "En progreso": "Em andamento",
+        "Cerrado": "Fechado",
+        "Editar": "Editar",
+        "Acciones": "Ações",
+        "Buscar zona, descripción o acción": "Buscar zona, descrição ou ação",
+        "Limpiar filtros": "Limpar filtros",
+        "Editar seleccionado": "Editar selecionado",
+        "Eliminar seleccionado": "Excluir selecionado",
+        "Agregar foto": "Adicionar foto",
+        "Subir evidencia": "Enviar evidência",
+        "Sin fotos registradas.": "Nenhuma foto registrada.",
+        "Comentario": "Comentário",
+        "Subir": "Enviar",
+        "Eliminar foto": "Excluir foto",
+        "Tomar o seleccionar foto": "Tirar ou selecionar foto",
+        "¿Eliminar esta foto?": "Excluir esta foto?",
+        "Registro fotográfico de evidencia": "Registro fotográfico de evidência",
+        "Exportar planta 5S": "Exportar planta 5S",
+        "Descargar ZIP (2 CSV)": "Baixar ZIP (2 CSV)",
+        "Descargar reporte PDF": "Baixar relatório PDF",
+        "Información de la planta": "Informações da planta",
+        "Idioma": "Idioma",
+        "General": "Geral",
+        "¿Eliminar esta planta 5S?": "Excluir esta planta 5S?",
+        "Campo requerido": "Campo obrigatório",
+        "opcional": "opcional",
+        "Evidencia fotográfica": "Evidência fotográfica",
+        "Puntaje por pilar": "Pontuação por pilar",
+        "Cerrar": "Fechar",
+        "Del catálogo": "Do catálogo",
+        "Resultados de auditorías": "Resultados das auditorias",
+        "Hallazgos por fase": "Achados por pilar",
+        "Estado de hallazgos": "Status dos achados",
+        "Evidencia fotográfica reciente": "Evidência fotográfica recente",
+        "Fase 5S": "Pilar 5S",
+        "filtrado por fase": "filtrado por pilar",
+        "Selecciona": "Selecione",
+        "País": "País",
+        "Editar planta": "Editar planta",
+        "separadas por coma": "separadas por vírgula",
+        "Áreas / zonas de la planta": "Áreas / zonas da planta",
+        "Catálogo de posibilidades": "Catálogo de possibilidades",
+        "Gestionar catálogo": "Gerenciar catálogo",
+        "Agregar al catálogo": "Adicionar ao catálogo",
+        "Volver": "Voltar",
+        "Planta": "Planta",
+        "Cronograma de Seguimiento": "Cronograma de acompanhamento",
+        "Filtros": "Filtros",
+        "Fecha desde": "Data de",
+        "Fecha hasta": "Data até",
+        "Rango rápido": "Intervalo rápido",
+        "Todo": "Tudo",
+        "Aplicar": "Aplicar",
+        "Gantt semanal": "Gantt semanal",
+        "Hallazgo": "Achado",
+        "Semana actual": "Semana atual",
+        "Todas": "Todas",
+        "Cronograma": "Cronograma",
+        "Fase": "Pilar", "Editar entrada": "Editar entrada",
+        "Catálogo de Países y Plantas": "Catálogo de Países e Plantas",
+        "Registro maestro reutilizable al crear una planta o registrar una auditoría/hallazgo.":
+            "Registro mestre reutilizável ao criar uma planta ou registrar uma auditoria/achado.",
+        "Sin entradas.": "Sem entradas.", "Agregar entrada": "Adicionar entrada", "Agregar": "Adicionar", "Otro": "Outro",
+        "¿Solo tiene lo que usa?": "Você só tem o que usa?",
+        "¿Es de fácil acceso?": "É de fácil acesso?",
+        "¿Los elementos están identificados?": "Os itens estão identificados?",
+        "¿Todo está en el lugar correcto?": "Tudo está no lugar correto?",
+        "¿El lugar está limpio?": "O local está limpo?",
+        "¿Los depósitos de basura contienen el tipo correcto?": "As lixeiras contêm o tipo correto de resíduo?",
+        "¿Organización general según la norma?": "Organização geral de acordo com a norma?",
+        "¿Se usan y actualizan los tableros de anuncios?": "Os quadros de avisos são usados e atualizados?",
+        "¿Se mantiene capacitación frecuente de 5S?": "O treinamento frequente de 5S é mantido?",
+        "¿Las 5S se implementan y se siguen?": "Os 5S são implementados e seguidos?",
+    },
 }
 
 
@@ -188,8 +332,11 @@ TEMPLATES = {
     {% if current_user %}
     <span class="user-email">{{ current_user.email }}{% if current_user.role == "admin" %} <span class="role-badge">ADMIN</span>{% endif %}</span>
     {% endif %}
-    <a href="{{ url_for('set_lang', lang='es') }}" class="lang-link {{ 'active' if session.get('lang','es')=='es' else '' }}">ES</a>
-    <a href="{{ url_for('set_lang', lang='en') }}" class="lang-link {{ 'active' if session.get('lang','es')=='en' else '' }}">EN</a>
+    <select class="lang-select" onchange="window.location.href=this.value">
+      <option value="{{ url_for('set_lang', lang='es') }}" {{ 'selected' if session.get('lang','es')=='es' else '' }}>Español</option>
+      <option value="{{ url_for('set_lang', lang='en') }}" {{ 'selected' if session.get('lang','es')=='en' else '' }}>English</option>
+      <option value="{{ url_for('set_lang', lang='pt') }}" {{ 'selected' if session.get('lang','es')=='pt' else '' }}>Português</option>
+    </select>
     {% if current_user %}
     <span class="avatar" title="{{ current_user.email }}">{{ current_user.initials }}</span>
     <a href="{{ url_for('logout') }}" class="lang-link">{{ tr("Salir") }}</a>
@@ -395,6 +542,68 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
 </script>
 {% endblock %}
 """,
+    'paises_plantas.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('plantas_list') }}" class="sidebar-btn">← {{ tr("Volver a plantas") }}</a>
+{% endblock %}
+
+{% block content %}
+  <h2>{{ tr("Catálogo de Países y Plantas") }}</h2>
+  <p class="muted-note">{{ tr("Registro maestro reutilizable al crear una planta o registrar una auditoría/hallazgo.") }}</p>
+
+  <div class="form-card" style="margin-bottom:20px;">
+    <h3 style="margin-top:0;">{{ tr("Editar entrada") if edit_item else tr("Agregar entrada") }}</h3>
+    <form method="post" action="{{ url_for('paises_plantas_add') }}">
+      <input type="hidden" name="pid" value="{{ pid }}">
+      {% if edit_idx is not none %}<input type="hidden" name="idx" value="{{ edit_idx }}">{% endif %}
+      <div class="form-row-3">
+        <div>
+          <label>{{ tr("País") }}</label>
+          <input type="text" name="pais" value="{{ edit_item.pais if edit_item else '' }}" required>
+        </div>
+        <div>
+          <label>{{ tr("Planta") }}</label>
+          <input type="text" name="planta" value="{{ edit_item.planta if edit_item else '' }}" required>
+        </div>
+        <div>
+          <label>{{ tr("Áreas / zonas de la planta") }} ({{ tr("separadas por coma") }})</label>
+          <input type="text" name="areas" value="{{ edit_item.areas|join(', ') if edit_item else '' }}" placeholder="Ej: Inbound, Packing, Outbound">
+        </div>
+      </div>
+      <div class="form-actions">
+        {% if edit_item %}
+        <a href="{{ url_for('paises_plantas_view', pid=pid) }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        {% endif %}
+        <button type="submit" class="btn-primary">{{ tr("Guardar") if edit_item else tr("Agregar") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>{{ tr("País") }}</th><th>{{ tr("Planta") }}</th><th>{{ tr("Áreas / zonas de la planta") }}</th><th>{{ tr("Acciones") }}</th></tr></thead>
+      <tbody>
+        {% for idx, r in registro %}
+        <tr>
+          <td>{{ r.pais }}</td>
+          <td>{{ r.planta }}</td>
+          <td>{{ r.areas|join(', ') }}</td>
+          <td class="actions-cell">
+            <a href="{{ url_for('paises_plantas_view', pid=pid, edit_idx=idx) }}" class="btn-mini">{{ tr("Editar") }}</a>
+            <form method="post" action="{{ url_for('paises_plantas_delete', idx=idx, pid=pid) }}" style="display:inline;" onsubmit="return confirm('¿Eliminar esta entrada?');">
+              <button type="submit" class="btn-mini btn-mini-danger">{{ tr("Eliminar") }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not registro %}
+        <tr><td colspan="4" class="muted-note">{{ tr("Sin entradas.") }}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}
+""",
     'catalogo.html': """{% extends "base.html" %}
 {% block sidebar %}
   {% if pid %}
@@ -409,22 +618,27 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
   <p class="muted-note">Catálogo global de descripciones sugeridas para hallazgos, compartido entre todas las plantas.</p>
 
   <div class="form-card" style="margin-bottom:20px;">
+    <h3 style="margin-top:0;">{{ tr("Editar entrada") if edit_item else tr("Agregar al catálogo") }}</h3>
     <form method="post" action="{{ url_for('catalogo_add') }}">
       <input type="hidden" name="pid" value="{{ pid }}">
+      {% if edit_idx is not none %}<input type="hidden" name="idx" value="{{ edit_idx }}">{% endif %}
       <div class="form-row-2">
         <div>
           <label>{{ tr("Fase") }}</label>
           <select name="fase">
-            {% for f in FASES %}<option value="{{ f }}">{{ f }}</option>{% endfor %}
+            {% for f in FASES %}<option value="{{ f }}" {{ 'selected' if edit_item and edit_item.fase==f }}>{{ f }}</option>{% endfor %}
           </select>
         </div>
         <div>
           <label>{{ tr("Descripción") }}</label>
-          <input type="text" name="descripcion" required>
+          <input type="text" name="descripcion" value="{{ edit_item.descripcion if edit_item else '' }}" required>
         </div>
       </div>
       <div class="form-actions">
-        <button type="submit" class="btn-primary">{{ tr("Agregar al catálogo") }}</button>
+        {% if edit_item %}
+        <a href="{{ url_for('catalogo_view', pid=pid) }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        {% endif %}
+        <button type="submit" class="btn-primary">{{ tr("Guardar") if edit_item else tr("Agregar al catálogo") }}</button>
       </div>
     </form>
   </div>
@@ -438,8 +652,9 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
         {% for real_idx, c in grouped[f] %}
         <tr>
           <td>{{ c.descripcion }}</td>
-          <td class="actions-cell" style="width:80px;">
-            <form method="post" action="{{ url_for('catalogo_delete', idx=real_idx, pid=pid) }}" onsubmit="return confirm('¿Eliminar esta entrada del catálogo?');">
+          <td class="actions-cell" style="width:150px;">
+            <a href="{{ url_for('catalogo_view', pid=pid, edit_idx=real_idx) }}" class="btn-mini">{{ tr("Editar") }}</a>
+            <form method="post" action="{{ url_for('catalogo_delete', idx=real_idx, pid=pid) }}" style="display:inline;" onsubmit="return confirm('¿Eliminar esta entrada del catálogo?');">
               <button type="submit" class="btn-mini btn-mini-danger">{{ tr("Eliminar") }}</button>
             </form>
           </td>
@@ -544,6 +759,9 @@ Usuarios</a>
   <a href="{{ url_for('catalogo_view') }}" class="sidebar-btn">
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13a2 2 0 0 1 2 2v14l-3-2-3 2-3-2-3 2-3-2-3 2V6a2 2 0 0 1 2-2z"/></svg>
   {{ tr("Catálogo de posibilidades") }}</a>
+  <a href="{{ url_for('paises_plantas_view') }}" class="sidebar-btn">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12c0-5 4-9 10-9s10 4 10 9-4 9-10 9-10-4-10-9z"/><path d="M2 12h20"/><path d="M12 3c2.5 2.5 4 6 4 9s-1.5 6.5-4 9c-2.5-2.5-4-6-4-9s1.5-6.5 4-9z"/></svg>
+  {{ tr("Catálogo de Países y Plantas") }}</a>
   {% if current_user and current_user.role == "admin" %}
   <div class="sidebar-label">Administración</div>
   <a href="{{ url_for('admin_users') }}" class="sidebar-btn">
@@ -596,13 +814,26 @@ Usuarios</a>
       <div class="form-row-2">
         <div>
           <label>{{ tr("País") }}</label>
-          <input type="text" name="pais" value="{{ old.get('pais','') }}" placeholder="Ej: Chile, Brasil, México">
+          <select id="pp-pais">
+            <option value="">{{ tr("Selecciona") }}...</option>
+            {% for pa in registro|map(attribute='pais')|unique|sort %}<option value="{{ pa }}">{{ pa }}</option>{% endfor %}
+            <option value="__otro__">+ {{ tr("Otro") }}</option>
+          </select>
+          <input type="text" name="pais" id="pp-pais-text" value="{{ old.get('pais','') }}" placeholder="Ej: Chile, Brasil, México" style="margin-top:6px;">
         </div>
         <div>
-          <label>{{ tr("Nombre de la planta") }}</label>
-          <input type="text" name="name" value="{{ old.get('name','') }}" required>
+          <label>{{ tr("Planta") }} ({{ tr("Del catálogo") }})</label>
+          <select id="pp-planta">
+            <option value="">{{ tr("Selecciona") }}...</option>
+          </select>
+          <p class="muted-note" style="margin:4px 0 0;">
+            <a href="{{ url_for('paises_plantas_view') }}" target="_blank">{{ tr("Gestionar catálogo") }}</a>
+          </p>
         </div>
       </div>
+
+      <label>{{ tr("Nombre de la planta") }}</label>
+      <input type="text" name="name" id="pp-name" value="{{ old.get('name','') }}" required>
 
       <label>{{ tr("Sitio / Operación") }}</label>
       <input type="text" name="site" value="{{ old.get('site','') }}">
@@ -621,7 +852,7 @@ Usuarios</a>
       </select>
 
       <label>{{ tr("Áreas / zonas de la planta") }} ({{ tr("separadas por coma") }})</label>
-      <input type="text" name="areas" value="{{ old.get('areas',[])|join(', ') }}" placeholder="Ej: Inbound, Packing, Woodshop, Outbound, Quality">
+      <input type="text" name="areas" id="pp-areas" value="{{ old.get('areas',[])|join(', ') }}" placeholder="Ej: Inbound, Packing, Woodshop, Outbound, Quality">
 
       <label>{{ tr("Problema / Alcance") }}</label>
       <textarea name="problem" rows="3">{{ old.get('problem','') }}</textarea>
@@ -632,6 +863,57 @@ Usuarios</a>
       </div>
     </form>
   </div>
+
+<script>
+(function(){
+  var REGISTRO = {{ registro|tojson }};
+  var paisSel = document.getElementById('pp-pais');
+  var paisText = document.getElementById('pp-pais-text');
+  var plantaSel = document.getElementById('pp-planta');
+  var nameInput = document.getElementById('pp-name');
+  var areasInput = document.getElementById('pp-areas');
+
+  function refreshPlantaOptions(){
+    var pais = paisSel.value === '__otro__' ? '' : paisSel.value;
+    plantaSel.innerHTML = '<option value="">Selecciona...</option>';
+    REGISTRO.filter(function(r){ return r.pais === pais; }).forEach(function(r){
+      var opt = document.createElement('option');
+      opt.value = r.planta;
+      opt.textContent = r.planta;
+      opt.dataset.areas = (r.areas || []).join(', ');
+      plantaSel.appendChild(opt);
+    });
+  }
+  paisSel.addEventListener('change', function(){
+    if (paisSel.value === '__otro__') {
+      paisText.style.display = '';
+      paisText.value = '';
+      paisText.focus();
+    } else if (paisSel.value) {
+      paisText.style.display = 'none';
+      paisText.value = paisSel.value;
+    }
+    refreshPlantaOptions();
+  });
+  plantaSel.addEventListener('change', function(){
+    var opt = plantaSel.options[plantaSel.selectedIndex];
+    if (!opt || !opt.value) return;
+    if (!nameInput.value) nameInput.value = opt.value;
+    if (opt.dataset.areas) areasInput.value = opt.dataset.areas;
+  });
+
+  // Al cargar: si ya hay un pais guardado (modo edicion), preseleccionar el select si existe en el catalogo.
+  var currentPais = paisText.value;
+  if (currentPais) {
+    var found = Array.prototype.slice.call(paisSel.options).some(function(o){ return o.value === currentPais; });
+    paisSel.value = found ? currentPais : '__otro__';
+    paisText.style.display = found ? 'none' : '';
+  } else {
+    paisText.style.display = 'none';
+  }
+  refreshPlantaOptions();
+})();
+</script>
 {% endblock %}
 """,
     'planta_overview.html': """{% extends "base.html" %}
@@ -811,7 +1093,7 @@ Usuarios</a>
       {% set checked_val = old_resp[loop.index0] if loop.index0 < old_resp|length else none %}
       <div class="checklist-row">
         <span class="checklist-fase" style="color:{{ FASE_COLOR.get(fase, NB) }};">{{ fase }}</span>
-        <span class="checklist-question">{{ pregunta }}</span>
+        <span class="checklist-question">{{ tr(pregunta) }}</span>
         <div class="checklist-btns">
           <label class="chk-btn chk-si"><input type="radio" name="q{{ loop.index0 }}" value="1" {{ 'checked' if checked_val == 1 else '' }}> ✓ Sí</label>
           <label class="chk-btn chk-no"><input type="radio" name="q{{ loop.index0 }}" value="0" {{ 'checked' if checked_val == 0 else '' }}> ✗ No</label>
@@ -1722,6 +2004,29 @@ def save_catalogo(data):
         tmp_file = CATALOGO_FILE.with_suffix(".tmp")
         tmp_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp_file.replace(CATALOGO_FILE)
+
+
+PAISES_PLANTAS_FILE = DATA_DIR / "paises_plantas.json"
+_paises_plantas_lock = threading.Lock()
+
+
+def load_paises_plantas():
+    with _paises_plantas_lock:
+        if PAISES_PLANTAS_FILE.exists():
+            try:
+                return json.loads(PAISES_PLANTAS_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                return []
+        return []
+
+
+def save_paises_plantas(data):
+    with _paises_plantas_lock:
+        tmp_file = PAISES_PLANTAS_FILE.with_suffix(".tmp")
+        tmp_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_file.replace(PAISES_PLANTAS_FILE)
+
+
 _plantas_lock = threading.Lock()
 
 
@@ -1901,7 +2206,7 @@ def admin_user_delete(uid):
 
 @app.route("/set_lang/<lang>")
 def set_lang(lang):
-    session["lang"] = lang if lang in ("es", "en") else "es"
+    session["lang"] = lang if lang in ("es", "en", "pt") else "es"
     return redirect(request.referrer or url_for("plantas_list"))
 
 
@@ -2112,7 +2417,7 @@ def new_planta_view():
         plantas.append(p)
         save_plantas(plantas)
         return redirect(url_for("planta_overview", pid=p["id"]))
-    return render_template("planta_form.html", old={})
+    return render_template("planta_form.html", old={}, registro=load_paises_plantas())
 
 
 @app.route("/planta/<pid>/edit", methods=["GET", "POST"])
@@ -2131,7 +2436,7 @@ def edit_planta_view(pid):
         p["pais"] = request.form.get("pais", "").strip()
         touch_and_save(plantas, p)
         return redirect(url_for("planta_overview", pid=pid))
-    return render_template("planta_form.html", old=p)
+    return render_template("planta_form.html", old=p, registro=load_paises_plantas())
 
 
 @app.route("/planta/<pid>/delete", methods=["POST"])
@@ -2406,7 +2711,9 @@ def catalogo_view():
         fase = c.get("fase")
         if fase in grouped:
             grouped[fase].append((real_idx, c))
-    return render_template("catalogo.html", grouped=grouped, pid=pid)
+    edit_idx = request.args.get("edit_idx", type=int)
+    edit_item = catalogo[edit_idx] if edit_idx is not None and 0 <= edit_idx < len(catalogo) else None
+    return render_template("catalogo.html", grouped=grouped, pid=pid, edit_idx=edit_idx, edit_item=edit_item)
 
 
 @app.route("/catalogo/add", methods=["POST"])
@@ -2415,9 +2722,13 @@ def catalogo_add():
     pid = request.form.get("pid", "")
     fase = request.form.get("fase", FASES[0])
     descripcion = request.form.get("descripcion", "").strip()
+    idx_raw = request.form.get("idx", "")
     if descripcion:
         catalogo = load_catalogo()
-        catalogo.append({"fase": fase, "descripcion": descripcion})
+        if idx_raw != "" and idx_raw.isdigit() and 0 <= int(idx_raw) < len(catalogo):
+            catalogo[int(idx_raw)] = {"fase": fase, "descripcion": descripcion}
+        else:
+            catalogo.append({"fase": fase, "descripcion": descripcion})
         save_catalogo(catalogo)
     return redirect(url_for("catalogo_view", pid=pid))
 
@@ -2431,6 +2742,51 @@ def catalogo_delete(idx):
         catalogo.pop(idx)
         save_catalogo(catalogo)
     return redirect(url_for("catalogo_view", pid=pid))
+
+
+# ── Catálogo global de Países y Plantas (para dropdowns en cascada) ────────
+@app.route("/paises-plantas")
+@login_required
+def paises_plantas_view():
+    pid = request.args.get("pid", "")
+    registro = load_paises_plantas()
+    edit_idx = request.args.get("edit_idx", type=int)
+    edit_item = registro[edit_idx] if edit_idx is not None and 0 <= edit_idx < len(registro) else None
+    return render_template(
+        "paises_plantas.html", registro=list(enumerate(registro)), pid=pid,
+        edit_idx=edit_idx, edit_item=edit_item,
+    )
+
+
+@app.route("/paises-plantas/add", methods=["POST"])
+@login_required
+def paises_plantas_add():
+    pid = request.form.get("pid", "")
+    pais = request.form.get("pais", "").strip()
+    planta = request.form.get("planta", "").strip()
+    areas_raw = request.form.get("areas", "").strip()
+    areas_list = [a.strip() for a in areas_raw.split(",") if a.strip()]
+    idx_raw = request.form.get("idx", "")
+    if pais and planta:
+        registro = load_paises_plantas()
+        item = {"pais": pais, "planta": planta, "areas": areas_list}
+        if idx_raw != "" and idx_raw.isdigit() and 0 <= int(idx_raw) < len(registro):
+            registro[int(idx_raw)] = item
+        else:
+            registro.append(item)
+        save_paises_plantas(registro)
+    return redirect(url_for("paises_plantas_view", pid=pid))
+
+
+@app.route("/paises-plantas/<int:idx>/delete", methods=["POST"])
+@login_required
+def paises_plantas_delete(idx):
+    pid = request.args.get("pid", "") or request.form.get("pid", "")
+    registro = load_paises_plantas()
+    if 0 <= idx < len(registro):
+        registro.pop(idx)
+        save_paises_plantas(registro)
+    return redirect(url_for("paises_plantas_view", pid=pid))
 
 
 # ── Evidencias fotográficas ────────────────────────────────────────────────

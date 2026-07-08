@@ -3280,7 +3280,7 @@ def _pdf_table_row(pdf, cells, widths, height=7, header=False, fill=None):
 def generate_pdf_report(p):
     from fpdf import FPDF
 
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
 
     pdf.add_page()
@@ -3422,7 +3422,7 @@ def generate_pdf_report(p):
     if hallazgos:
         pdf.add_page(orientation="L")
         _pdf_header(pdf, "Hallazgos 5S")
-        widths = [22, 32, 22, 62, 20, 62, 30, 27]
+        widths = [20, 28, 20, 58, 18, 58, 28, 25]
         headers = ["Fecha", "Zona", "Pilar", "Descripción", "Sever.", "Acción correctiva", "Responsable", "Estado"]
         _pdf_table_row(pdf, headers, widths, header=True)
         for i, h in enumerate(hallazgos):

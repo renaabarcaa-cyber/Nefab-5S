@@ -3211,10 +3211,10 @@ def _pdf_header(pdf, title):
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 13)
     pdf.set_xy(8, 3)
-    pdf.cell(140, 10, "NEFAB - 5S", 0, 0, "L")
+    _pdf_safe_cell(pdf, 140, 10, "NEFAB - 5S", 0, 0, "L")
     pdf.set_font("Helvetica", "", 10)
     pdf.set_xy(pdf.w - 110, 3)
-    pdf.cell(102, 10, _pdf_safe(title), 0, 0, "R")
+    _pdf_safe_cell(pdf, 102, 10, _pdf_safe(title), 0, 0, "R")
     pdf.set_text_color(0, 0, 0)
     pdf.set_y(20)
 
@@ -3222,9 +3222,40 @@ def _pdf_header(pdf, title):
 def _pdf_section_title(pdf, text):
     pdf.set_font("Helvetica", "B", 12)
     pdf.set_text_color(*_PDF_BLUE)
-    pdf.cell(0, 8, _pdf_safe(text), 0, 1)
+    _pdf_safe_cell(pdf, 0, 8, _pdf_safe(text), 0, 1)
     pdf.set_text_color(0, 0, 0)
     pdf.ln(1)
+
+
+def _pdf_safe_cell(pdf, w, h, text, border=0, ln=0, align="", fill=False):
+    """Envoltorio a prueba de fallos sobre pdf.cell(): si fpdf2 no puede
+    renderizar el texto en el ancho disponible ('Not enough horizontal
+    space to render a single character'), en vez de tumbar todo el PDF,
+    reintenta con un texto mas corto y como ultimo recurso deja la celda
+    vacia."""
+    try:
+        pdf.cell(w, h, text, border, ln, align, fill)
+    except Exception:
+        try:
+            pdf.cell(w, h, _pdf_truncate(text, 3), border, ln, align, fill)
+        except Exception:
+            try:
+                pdf.cell(w, h, "", border, ln, align, fill)
+            except Exception:
+                pass
+
+
+def _pdf_safe_multicell(pdf, w, h, text):
+    try:
+        pdf.multi_cell(w, h, text)
+    except Exception:
+        try:
+            pdf.multi_cell(w, h, _pdf_truncate(text, 20))
+        except Exception:
+            try:
+                pdf.multi_cell(w, h, "-")
+            except Exception:
+                pdf.ln(h)
 
 
 def _pdf_table_row(pdf, cells, widths, height=7, header=False, fill=None):
@@ -3241,7 +3272,7 @@ def _pdf_table_row(pdf, cells, widths, height=7, header=False, fill=None):
         pdf.set_text_color(0, 0, 0)
         do_fill = False
     for text, w in zip(cells, widths):
-        pdf.cell(w, height, _pdf_truncate(text, max(4, int(w / 1.7))), 1, 0, "L", do_fill)
+        _pdf_safe_cell(pdf, w, height, _pdf_truncate(text, max(4, int(w / 1.7))), 1, 0, "L", do_fill)
     pdf.ln(height)
     pdf.set_text_color(0, 0, 0)
 
@@ -3249,7 +3280,7 @@ def _pdf_table_row(pdf, cells, widths, height=7, header=False, fill=None):
 def generate_pdf_report(p):
     from fpdf import FPDF
 
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
 
     pdf.add_page()
@@ -3260,16 +3291,16 @@ def generate_pdf_report(p):
     pdf.set_fill_color(*area_color)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(35, 7, _pdf_safe(area), 0, 1, "C", True)
+    _pdf_safe_cell(pdf, 35, 7, _pdf_safe(area), 0, 1, "C", True)
     pdf.set_text_color(0, 0, 0)
     pdf.ln(4)
 
     pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, _pdf_truncate(p.get("name", ""), 70), 0, 1)
+    _pdf_safe_cell(pdf, 0, 10, _pdf_truncate(p.get("name", ""), 70), 0, 1)
 
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(*_PDF_GRAY)
-    pdf.cell(0, 6, _pdf_safe(f"{p.get('customer','')}  -  {p.get('site','')}  -  {p.get('created_at','')}"), 0, 1)
+    _pdf_safe_cell(pdf, 0, 6, _pdf_safe(f"{p.get('customer','')}  -  {p.get('site','')}  -  {p.get('created_at','')}"), 0, 1)
     pdf.set_text_color(0, 0, 0)
     pdf.ln(4)
 
@@ -3283,9 +3314,11 @@ def generate_pdf_report(p):
     ]
     for label, value in info_rows:
         pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(45, 6, _pdf_safe(label), 0, 0)
+        _pdf_safe_cell(pdf, 45, 6, _pdf_safe(label), 0, 0)
         pdf.set_font("Helvetica", "", 9)
-        pdf.multi_cell(0, 6, _pdf_wrap_long_words(value))
+        y_before = pdf.get_y()
+        _pdf_safe_multicell(pdf, 0, 6, _pdf_wrap_long_words(value))
+        pdf.set_xy(pdf.l_margin, max(pdf.get_y(), y_before + 6))
     pdf.ln(3)
 
     stats = planta_stats(p)
@@ -3305,11 +3338,11 @@ def generate_pdf_report(p):
         pdf.set_xy(x, y0 + 3)
         pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(*color)
-        pdf.cell(box_w, 7, _pdf_safe(value), 0, 0, "C")
+        _pdf_safe_cell(pdf, box_w, 7, _pdf_safe(value), 0, 0, "C")
         pdf.set_xy(x, y0 + 11)
         pdf.set_font("Helvetica", "", 7)
         pdf.set_text_color(*_PDF_GRAY)
-        pdf.cell(box_w, 5, _pdf_safe(label), 0, 0, "C")
+        _pdf_safe_cell(pdf, box_w, 5, _pdf_safe(label), 0, 0, "C")
     pdf.set_text_color(0, 0, 0)
     pdf.set_y(y0 + 24)
 
@@ -3318,13 +3351,13 @@ def generate_pdf_report(p):
         y = pdf.get_y()
         val = stats["pilares"].get(pil, 0)
         pdf.set_font("Helvetica", "", 9)
-        pdf.cell(55, 6, _pdf_safe(PILLAR_LABELS.get(pil, pil)), 0, 0)
+        _pdf_safe_cell(pdf, 55, 6, _pdf_safe(PILLAR_LABELS.get(pil, pil)), 0, 0)
         bar_w = max(1.0, 40.0 * (val / 100.0))
         color = _PDF_GREEN if val >= 80 else (_PDF_ORANGE if val >= 60 else _PDF_RED)
         pdf.set_fill_color(*color)
         pdf.rect(pdf.get_x(), y + 1, bar_w, 4, "F")
         pdf.set_xy(pdf.get_x() + 22, y)
-        pdf.cell(20, 6, f"{val}%", 0, 0)
+        _pdf_safe_cell(pdf, 20, 6, f"{val}%", 0, 0)
         pdf.ln(6)
     pdf.ln(2)
 
@@ -3350,22 +3383,22 @@ def generate_pdf_report(p):
             pdf.set_xy(13, y0 + 3)
             pdf.set_font("Helvetica", "B", 11)
             pdf.set_text_color(0, 0, 0)
-            pdf.cell(110, 6, _pdf_truncate(f"{a.get('area','') or '-'} — {p.get('pais','') or '-'}", 42), 0, 0)
+            _pdf_safe_cell(pdf, 110, 6, _pdf_truncate(f"{a.get('area','') or '-'} — {p.get('pais','') or '-'}", 42), 0, 0)
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(*_PDF_GRAY)
             pdf.set_xy(123, y0 + 3)
-            pdf.cell(64, 6, _pdf_truncate(f"Auditor: {a.get('auditor','-') or '-'} | {a.get('fecha','')}", 42), 0, 0, "R")
+            _pdf_safe_cell(pdf, 64, 6, _pdf_truncate(f"Auditor: {a.get('auditor','-') or '-'} | {a.get('fecha','')}", 42), 0, 0, "R")
             pdf.set_text_color(0, 0, 0)
 
             # % General, grande, a la izquierda
             pdf.set_xy(13, y0 + 11)
             pdf.set_font("Helvetica", "B", 17)
             pdf.set_text_color(*clas_color)
-            pdf.cell(32, 10, f"{audit_avg(a)}%", 0, 0)
+            _pdf_safe_cell(pdf, 32, 10, f"{audit_avg(a)}%", 0, 0)
             pdf.set_font("Helvetica", "", 7)
             pdf.set_xy(13, y0 + 21)
             pdf.set_text_color(*_PDF_GRAY)
-            pdf.cell(32, 5, "General", 0, 0)
+            _pdf_safe_cell(pdf, 32, 5, "General", 0, 0)
             pdf.set_text_color(0, 0, 0)
 
             # Los 5 pilares, en columnas
@@ -3375,11 +3408,11 @@ def generate_pdf_report(p):
                 val = a.get(f"pct_{pil}", 0)
                 pdf.set_xy(x, y0 + 11)
                 pdf.set_font("Helvetica", "B", 11)
-                pdf.cell(col_w, 6, f"{val}%", 0, 0, "C")
+                _pdf_safe_cell(pdf, col_w, 6, f"{val}%", 0, 0, "C")
                 pdf.set_xy(x, y0 + 18)
                 pdf.set_font("Helvetica", "", 7)
                 pdf.set_text_color(*_PDF_GRAY)
-                pdf.cell(col_w, 5, pil, 0, 0, "C")
+                _pdf_safe_cell(pdf, col_w, 5, pil, 0, 0, "C")
                 pdf.set_text_color(0, 0, 0)
                 x += col_w
 
@@ -3421,7 +3454,7 @@ def generate_pdf_report(p):
                 pass
             pdf.set_xy(x, y + col_h - 11)
             pdf.set_font("Helvetica", "", 8)
-            pdf.multi_cell(col_w, 4, _pdf_wrap_long_words(_pdf_truncate(ev.get("caption", "") or "-", 60), max_word_len=18))
+            _pdf_safe_multicell(pdf, col_w, 4, _pdf_wrap_long_words(_pdf_truncate(ev.get("caption", "") or "-", 60), max_word_len=18))
             x += col_w + 10
 
     try:

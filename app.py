@@ -329,8 +329,8 @@ TEMPLATES = {
     <span class="app-name">Nefab 5S<small>Auditorías y Hallazgos</small></span>
     {% if current_user %}
     <div class="project-switch">
-      <a href="{{ url_for('plantas_list') }}" class="project-switch-btn {{ 'active' if project=='5s' else '' }}">🧹 5S</a>
-      <a href="{{ url_for('seg_sitios_list') }}" class="project-switch-btn {{ 'active' if project=='seguridad' else '' }}">🦺 Seguridad</a>
+      <a href="{{ url_for('plantas_list') }}" class="project-switch-btn {{ 'active' if project=='5s' else '' }}">5S</a>
+      <a href="{{ url_for('seg_sitios_list') }}" class="project-switch-btn {{ 'active' if project=='seguridad' else '' }}">Seguridad</a>
     </div>
     {% endif %}
   </div>
@@ -1484,6 +1484,9 @@ Inicio</a>
 <a href="{{ url_for('seg_hallazgos_list', sid=s.id) }}" class="sidebar-btn {{ 'active' if active=='Hallazgos' else '' }}">
 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none"/></svg>
 Hallazgos</a>
+<a href="{{ url_for('seg_cronograma_view') }}" class="sidebar-btn">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+Cronograma</a>
 <div class="active-project-panel">
   <div class="active-project-label">Sitio activo</div>
   <div class="active-project-name">{{ s.get('name','') }}</div>
@@ -1492,16 +1495,120 @@ Hallazgos</a>
 </div>
 """,
 
+    'seg_cronograma.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">← Volver a sitios</a>
+{% endblock %}
+
+{% block content %}
+  <h2>Cronograma de Seguimiento — Seguridad</h2>
+
+  <div class="chart-card" style="margin-bottom:16px;">
+    <h3>Filtros</h3>
+    <form method="get" id="cron-form">
+      <div class="filters-bar" style="margin-bottom:10px;">
+        <select name="sitio">
+          <option value="">Sitio: Todos</option>
+          {% for sn in sitios_names %}<option value="{{ sn }}" {{ 'selected' if sitio_f==sn }}>{{ sn }}</option>{% endfor %}
+        </select>
+        <select name="estado">
+          <option value="">Estado: Todos</option>
+          {% for s in FINDING_STATUSES %}<option value="{{ s }}" {{ 'selected' if estado_f==s }}>{{ tr(s) }}</option>{% endfor %}
+        </select>
+        <select name="severidad">
+          <option value="">Severidad: Todas</option>
+          {% for s in SEVERITIES %}<option value="{{ s }}" {{ 'selected' if severidad_f==s }}>{{ tr(s) }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="filters-bar">
+        <span class="muted" style="font-size:12px;">Fecha desde</span>
+        <input type="date" name="date_from" id="cron-from" value="{{ date_from }}">
+        <span class="muted" style="font-size:12px;">Fecha hasta</span>
+        <input type="date" name="date_to" id="cron-to" value="{{ date_to }}">
+        <span class="muted" style="font-size:12px;">Rango rápido</span>
+        <button type="button" class="btn-icon-text" data-days="7">7d</button>
+        <button type="button" class="btn-icon-text" data-days="30">30d</button>
+        <button type="button" class="btn-icon-text" data-days="90">90d</button>
+        <button type="button" class="btn-icon-text" data-days="0">Todo</button>
+        <button type="submit" class="btn-primary">▶ Aplicar</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="chart-card">
+    <h3>Gantt semanal</h3>
+    <div class="table-wrap">
+      <table class="data-table gantt-table">
+        <thead>
+          <tr>
+            <th style="min-width:260px;">Área / Hallazgo</th>
+            {% for w in weeks %}<th class="{{ 'gantt-current' if w.is_current else '' }}">{{ w.label }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          {% set sev_color = RED if r.severity=='Alto' else (NO if r.severity=='Medio' else NG) %}
+          <tr>
+            <td class="gantt-row-label" style="border-left:5px solid {{ sev_color }};">
+              [{{ r.area }}] {{ r.description }}
+              <div class="muted" style="font-size:10px;">{{ r.sitio_name }} · {{ tr(r.severity) }}</div>
+            </td>
+            {% for w in weeks %}
+            <td class="{{ 'gantt-current' if w.is_current else '' }}">
+              {% if loop.index0 == r.week_idx %}
+              <span class="gantt-h {{ 'gantt-h-cerrado' if r.status=='Cerrado' else 'gantt-h-abierto' }}">H</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+          {% if not rows %}
+          <tr><td colspan="{{ weeks|length + 1 }}" class="muted-note">Sin hallazgos en el rango seleccionado.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    <div class="gantt-legend">
+      <span><span class="gantt-h gantt-h-abierto">H</span> Abierto</span>
+      <span><span class="gantt-h gantt-h-cerrado">H</span> Cerrado</span>
+      <span><span class="gantt-current-swatch"></span> Semana actual</span>
+    </div>
+  </div>
+
+<script>
+document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var days = parseInt(btn.dataset.days, 10);
+    var to = new Date();
+    var toStr = to.toISOString().slice(0,10);
+    document.getElementById('cron-to').value = toStr;
+    if (days === 0) {
+      document.getElementById('cron-from').value = '2020-01-01';
+    } else {
+      var from = new Date();
+      from.setDate(from.getDate() - days);
+      document.getElementById('cron-from').value = from.toISOString().slice(0,10);
+    }
+    document.getElementById('cron-form').submit();
+  });
+});
+</script>
+{% endblock %}
+""",
+
     'seg_sitios_list.html': """{% extends "base.html" %}
 {% block sidebar %}
   <div class="sidebar-label">Inspección de Seguridad</div>
   <a href="{{ url_for('seg_sitio_new') }}" class="sidebar-btn primary">
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
   Nuevo sitio</a>
+  <a href="{{ url_for('seg_cronograma_view') }}" class="sidebar-btn">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+  Cronograma</a>
 {% endblock %}
 
 {% block content %}
-  <h1 class="page-title">🦺 Inspección de Seguridad — Sitios</h1>
+  <h1 class="page-title">Inspección de Seguridad — Sitios</h1>
   <p class="muted-note">Recorridos de seguridad y hallazgos de zonas desordenadas, independiente del registro 5S.</p>
 
   <div class="kpi-row">
@@ -4044,6 +4151,21 @@ def get_seg_sitio_or_404(sid):
     return s
 
 
+def all_seg_hallazgos_flat():
+    """Aplana los hallazgos de todos los sitios de seguridad en una sola
+    lista, con el nombre del sitio agregado, para el Cronograma."""
+    out = []
+    for s in load_seg_sitios():
+        full = get_seg_sitio(s["id"])
+        for idx, h in enumerate(full.get("hallazgos", [])):
+            item = dict(h)
+            item["sitio_id"] = s["id"]
+            item["sitio_name"] = s.get("name", "")
+            item["_idx"] = idx
+            out.append(item)
+    return out
+
+
 @app.route("/seguridad")
 @login_required
 def seg_home():
@@ -4199,6 +4321,84 @@ def seg_foto_delete(sid, hid, foto_id):
         except Exception:
             pass
     return redirect(url_for("seg_hallazgo_form", sid=sid, hid=hid))
+
+
+@app.route("/seguridad/cronograma")
+@login_required
+def seg_cronograma_view():
+    hallazgos = all_seg_hallazgos_flat()
+    sitios_names = sorted({h.get("sitio_name", "") for h in hallazgos if h.get("sitio_name")})
+
+    sitio_f = request.args.get("sitio", "")
+    estado_f = request.args.get("estado", "")
+    severidad_f = request.args.get("severidad", "")
+    hoy = date.today()
+    date_from_s = request.args.get("date_from", "") or (hoy - timedelta(days=28)).isoformat()
+    date_to_s = request.args.get("date_to", "") or hoy.isoformat()
+
+    try:
+        date_from = datetime.strptime(date_from_s, "%Y-%m-%d").date()
+    except Exception:
+        date_from = hoy - timedelta(days=28)
+    try:
+        date_to = datetime.strptime(date_to_s, "%Y-%m-%d").date()
+    except Exception:
+        date_to = hoy
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+
+    filtered = []
+    for h in hallazgos:
+        if sitio_f and h.get("sitio_name") != sitio_f:
+            continue
+        if estado_f and h.get("status") != estado_f:
+            continue
+        if severidad_f and h.get("severity") != severidad_f:
+            continue
+        h_date_s = h.get("date", "")
+        try:
+            h_date = datetime.strptime(h_date_s, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if h_date < date_from or h_date > date_to:
+            continue
+        filtered.append((h, h_date))
+
+    weeks = []
+    cur = date_from - timedelta(days=date_from.weekday())
+    end_monday = date_to - timedelta(days=date_to.weekday())
+    hoy_monday = hoy - timedelta(days=hoy.weekday())
+    while cur <= end_monday:
+        iso_week = cur.isocalendar()[1]
+        weeks.append({
+            "label": f"S{iso_week}",
+            "start": cur, "end": cur + timedelta(days=6),
+            "is_current": cur == hoy_monday,
+        })
+        cur += timedelta(days=7)
+    if not weeks:
+        iso_week = hoy_monday.isocalendar()[1]
+        weeks = [{"label": f"S{iso_week}", "start": hoy_monday, "end": hoy_monday, "is_current": True}]
+
+    rows = []
+    for h, h_date in filtered:
+        week_idx = None
+        for i, w in enumerate(weeks):
+            if w["start"] <= h_date <= w["end"]:
+                week_idx = i
+                break
+        rows.append({
+            "area": h.get("area", ""), "description": h.get("description", ""),
+            "status": h.get("status", "Abierto"), "severity": h.get("severity", ""),
+            "sitio_name": h.get("sitio_name", ""), "sitio_id": h.get("sitio_id"),
+            "week_idx": week_idx,
+        })
+
+    return render_template(
+        "seg_cronograma.html", weeks=weeks, rows=rows, sitios_names=sitios_names,
+        sitio_f=sitio_f, estado_f=estado_f, severidad_f=severidad_f,
+        date_from=date_from.isoformat(), date_to=date_to.isoformat(),
+    )
 
 
 if __name__ == "__main__":

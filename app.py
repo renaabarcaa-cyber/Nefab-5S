@@ -172,6 +172,74 @@ TRANSLATIONS = {
         "¿Se usan y actualizan los tableros de anuncios?": "Are bulletin boards used and updated?",
         "¿Se mantiene capacitación frecuente de 5S?": "Is frequent 5S training maintained?",
         "¿Las 5S se implementan y se siguen?": "Are the 5S implemented and followed?",
+        "Herramientas o materiales innecesarios en el área": "Unnecessary tools or materials in the area",
+        "Documentación antigua o desactualizada no eliminada": "Old or outdated documentation not removed",
+        "Equipos obsoletos almacenados sin motivo": "Obsolete equipment stored without reason",
+        "Mezcla de materiales útiles con desechos": "Useful materials mixed with waste",
+        "Falta identificación de lo que se debe descartar": "Missing identification of what should be discarded",
+        "Herramientas sin lugar definido o mal ubicadas": "Tools without a defined place or misplaced",
+        "Falta señalización en estanterías y cajones": "Missing signage on shelves and drawers",
+        "Mala organización de cables y utensilios": "Poor organization of cables and utensils",
+        "Dificultad para acceder a elementos frecuentes": "Difficulty accessing frequently used items",
+        "Áreas de almacenamiento sobrecargadas": "Overloaded storage areas",
+        "Suciedad visible en maquinaria, pisos o superficies": "Visible dirt on machinery, floors or surfaces",
+        "Fugas de aceite, grasa o residuos sin atender": "Unattended oil, grease or waste leaks",
+        "Equipos con polvo acumulado o manchas": "Equipment with accumulated dust or stains",
+        "Áreas de difícil acceso sin limpieza regular": "Hard-to-reach areas without regular cleaning",
+        "Falta cronograma o responsables de limpieza": "Missing cleaning schedule or responsible person",
+        "Ausencia de procedimientos visuales o instructivos": "Absence of visual or instructional procedures",
+        "Falta consistencia entre turnos": "Lack of consistency between shifts",
+        "Etiquetado inconsistente o incompleto": "Inconsistent or incomplete labeling",
+        "Señalética confusa o deteriorada": "Confusing or deteriorated signage",
+        "No uso de formatos estandarizados": "Standardized formats not used",
+        "No cumplimiento de normas básicas de orden": "Non-compliance with basic order standards",
+        "Falta de compromiso del personal con las 5S": "Lack of staff commitment to 5S",
+        "No realización de auditorías internas periódicas": "Periodic internal audits not performed",
+        "Supervisores que no refuerzan la cultura 5S": "Supervisors not reinforcing the 5S culture",
+        "Inexistencia de capacitaciones o seguimientos": "No training or follow-up",
+        "Inspección de Seguridad": "Safety Inspection",
+        "Inspección de Seguridad — Sitios": "Safety Inspection — Sites",
+        "Recorridos de seguridad y hallazgos de zonas desordenadas, independiente del registro 5S.":
+            "Safety walkthroughs and findings for disorganized zones, independent from the 5S log.",
+        "Nuevo sitio": "New site",
+        "Total sitios": "Total sites",
+        "Sin sitios registrados todavía.": "No sites registered yet.",
+        "abiertos": "open", "hallazgos totales": "total findings",
+        "Volver a sitios": "Back to sites",
+        "Nombre del sitio": "Site name",
+        "Editar sitio": "Edit site",
+        "¿Eliminar este sitio de seguridad?": "Delete this safety site?",
+        "Secciones del sitio": "Site sections",
+        "Sitio activo": "Active site",
+        "Registro de hallazgos de seguridad": "Safety findings log",
+        "+ Nuevo hallazgo": "+ New finding",
+        "Fotos": "Photos",
+        "Agregar fotos": "Add photos",
+        "Seleccionar fotos (puedes elegir varias)": "Select photos (you can choose several)",
+        "Sin fotos en este hallazgo.": "No photos for this finding.",
+        "Hallazgo de seguridad": "Safety finding",
+        "Cronograma de Seguimiento — Seguridad": "Follow-up Schedule — Safety",
+        "Sitio": "Site",
+        "Severidad: Todas": "Severity: All",
+        "Sitio: Todos": "Site: All",
+        "Sin hallazgos en el rango seleccionado.": "No findings in the selected range.",
+        "Seguridad": "Safety",
+        "Alcance / Notas": "Scope / Notes",
+        "Hallazgos totales": "Total findings",
+        "Abiertos": "Open",
+        "Cerrados": "Closed",
+        "Severidad Alta": "High Severity",
+        "Últimos hallazgos con fotos": "Recent findings with photos",
+        "Hallazgos de Seguridad": "Safety Findings",
+        "Zona": "Zone",
+        "Sin hallazgos registrados.": "No findings registered.",
+        "¿Eliminar este hallazgo?": "Delete this finding?",
+        "Editar hallazgo": "Edit finding",
+        "Nuevo hallazgo de Seguridad": "New Safety Finding",
+        "Completa al menos zona y descripción.": "Fill in at least zone and description.",
+        "Descripción del hallazgo": "Finding description",
+        "Fotos (puedes seleccionar varias a la vez)": "Photos (you can select several at once)",
+        "Fotos de este hallazgo": "Photos for this finding",
     },
     "pt": {
         "Plantas 5S": "Plantas 5S",
@@ -302,6 +370,74 @@ TRANSLATIONS = {
         "¿Se usan y actualizan los tableros de anuncios?": "Os quadros de avisos são usados e atualizados?",
         "¿Se mantiene capacitación frecuente de 5S?": "O treinamento frequente de 5S é mantido?",
         "¿Las 5S se implementan y se siguen?": "Os 5S são implementados e seguidos?",
+        "Herramientas o materiales innecesarios en el área": "Ferramentas ou materiais desnecessários na área",
+        "Documentación antigua o desactualizada no eliminada": "Documentação antiga ou desatualizada não eliminada",
+        "Equipos obsoletos almacenados sin motivo": "Equipamentos obsoletos armazenados sem motivo",
+        "Mezcla de materiales útiles con desechos": "Mistura de materiais úteis com resíduos",
+        "Falta identificación de lo que se debe descartar": "Falta identificação do que deve ser descartado",
+        "Herramientas sin lugar definido o mal ubicadas": "Ferramentas sem lugar definido ou mal posicionadas",
+        "Falta señalización en estanterías y cajones": "Falta sinalização em prateleiras e gavetas",
+        "Mala organización de cables y utensilios": "Má organização de cabos e utensílios",
+        "Dificultad para acceder a elementos frecuentes": "Dificuldade de acesso a itens frequentes",
+        "Áreas de almacenamiento sobrecargadas": "Áreas de armazenamento sobrecarregadas",
+        "Suciedad visible en maquinaria, pisos o superficies": "Sujeira visível em máquinas, pisos ou superfícies",
+        "Fugas de aceite, grasa o residuos sin atender": "Vazamentos de óleo, graxa ou resíduos sem atenção",
+        "Equipos con polvo acumulado o manchas": "Equipamentos com poeira acumulada ou manchas",
+        "Áreas de difícil acceso sin limpieza regular": "Áreas de difícil acesso sem limpeza regular",
+        "Falta cronograma o responsables de limpieza": "Falta cronograma ou responsáveis pela limpeza",
+        "Ausencia de procedimientos visuales o instructivos": "Ausência de procedimentos visuais ou instrutivos",
+        "Falta consistencia entre turnos": "Falta consistência entre turnos",
+        "Etiquetado inconsistente o incompleto": "Etiquetagem inconsistente ou incompleta",
+        "Señalética confusa o deteriorada": "Sinalização confusa ou deteriorada",
+        "No uso de formatos estandarizados": "Não uso de formatos padronizados",
+        "No cumplimiento de normas básicas de orden": "Não cumprimento de normas básicas de ordem",
+        "Falta de compromiso del personal con las 5S": "Falta de comprometimento da equipe com os 5S",
+        "No realización de auditorías internas periódicas": "Não realização de auditorias internas periódicas",
+        "Supervisores que no refuerzan la cultura 5S": "Supervisores que não reforçam a cultura 5S",
+        "Inexistencia de capacitaciones o seguimientos": "Inexistência de treinamentos ou acompanhamentos",
+        "Inspección de Seguridad": "Inspeção de Segurança",
+        "Inspección de Seguridad — Sitios": "Inspeção de Segurança — Locais",
+        "Recorridos de seguridad y hallazgos de zonas desordenadas, independiente del registro 5S.":
+            "Rondas de segurança e achados de zonas desorganizadas, independente do registro 5S.",
+        "Nuevo sitio": "Novo local",
+        "Total sitios": "Total de locais",
+        "Sin sitios registrados todavía.": "Nenhum local registrado ainda.",
+        "abiertos": "abertos", "hallazgos totales": "achados totais",
+        "Volver a sitios": "Voltar aos locais",
+        "Nombre del sitio": "Nome do local",
+        "Editar sitio": "Editar local",
+        "¿Eliminar este sitio de seguridad?": "Excluir este local de segurança?",
+        "Secciones del sitio": "Seções do local",
+        "Sitio activo": "Local ativo",
+        "Registro de hallazgos de seguridad": "Registro de achados de segurança",
+        "+ Nuevo hallazgo": "+ Novo achado",
+        "Fotos": "Fotos",
+        "Agregar fotos": "Adicionar fotos",
+        "Seleccionar fotos (puedes elegir varias)": "Selecionar fotos (você pode escolher várias)",
+        "Sin fotos en este hallazgo.": "Sem fotos neste achado.",
+        "Hallazgo de seguridad": "Achado de segurança",
+        "Cronograma de Seguimiento — Seguridad": "Cronograma de acompanhamento — Segurança",
+        "Sitio": "Local",
+        "Severidad: Todas": "Severidade: Todas",
+        "Sitio: Todos": "Local: Todos",
+        "Sin hallazgos en el rango seleccionado.": "Nenhum achado no intervalo selecionado.",
+        "Seguridad": "Segurança",
+        "Alcance / Notas": "Escopo / Notas",
+        "Hallazgos totales": "Total de achados",
+        "Abiertos": "Abertos",
+        "Cerrados": "Fechados",
+        "Severidad Alta": "Severidade Alta",
+        "Últimos hallazgos con fotos": "Últimos achados com fotos",
+        "Hallazgos de Seguridad": "Achados de Segurança",
+        "Zona": "Zona",
+        "Sin hallazgos registrados.": "Nenhum achado registrado.",
+        "¿Eliminar este hallazgo?": "Excluir este achado?",
+        "Editar hallazgo": "Editar achado",
+        "Nuevo hallazgo de Seguridad": "Novo Achado de Segurança",
+        "Completa al menos zona y descripción.": "Preencha pelo menos zona e descrição.",
+        "Descripción del hallazgo": "Descrição do achado",
+        "Fotos (puedes seleccionar varias a la vez)": "Fotos (você pode selecionar várias de uma vez)",
+        "Fotos de este hallazgo": "Fotos deste achado",
     },
 }
 
@@ -516,7 +652,7 @@ TEMPLATES = {
           </tr>
           {% endfor %}
           {% if not rows %}
-          <tr><td colspan="{{ weeks|length + 1 }}" class="muted-note">Sin hallazgos en el rango seleccionado.</td></tr>
+          <tr><td colspan="{{ weeks|length + 1 }}" class="muted-note">{{ tr("Sin hallazgos en el rango seleccionado.") }}</td></tr>
           {% endif %}
         </tbody>
       </table>
@@ -657,7 +793,7 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
       <tbody>
         {% for real_idx, c in grouped[f] %}
         <tr>
-          <td>{{ c.descripcion }}</td>
+          <td>{{ tr(c.descripcion) }}</td>
           <td class="actions-cell" style="width:150px;">
             <a href="{{ url_for('catalogo_view', pid=pid, edit_idx=real_idx) }}" class="btn-mini">{{ tr("Editar") }}</a>
             <form method="post" action="{{ url_for('catalogo_delete', idx=real_idx, pid=pid) }}" style="display:inline;" onsubmit="return confirm('¿Eliminar esta entrada del catálogo?');">
@@ -1475,73 +1611,73 @@ Usuarios</a>
 
     '_sidebar_seg_sitio.html': """<a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">
 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg>
-Volver a sitios</a>
+{{ tr("Volver a sitios") }}</a>
 <div class="sidebar-label">{{ s.get('name','') }}</div>
-<div class="sidebar-label">Secciones del sitio</div>
+<div class="sidebar-label">{{ tr("Secciones del sitio") }}</div>
 <a href="{{ url_for('seg_sitio_overview', sid=s.id) }}" class="sidebar-btn {{ 'active' if active=='Inicio' else '' }}">
 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l3-4"/><circle cx="12" cy="15" r="1"/></svg>
 Inicio</a>
 <a href="{{ url_for('seg_hallazgos_list', sid=s.id) }}" class="sidebar-btn {{ 'active' if active=='Hallazgos' else '' }}">
 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none"/></svg>
-Hallazgos</a>
+{{ tr("Hallazgos") }}</a>
 <a href="{{ url_for('seg_cronograma_view') }}" class="sidebar-btn">
 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
-Cronograma</a>
+{{ tr("Cronograma") }}</a>
 <div class="active-project-panel">
-  <div class="active-project-label">Sitio activo</div>
+  <div class="active-project-label">{{ tr("Sitio activo") }}</div>
   <div class="active-project-name">{{ s.get('name','') }}</div>
-  <div class="active-project-updated">Actualizado: {{ s.get('updated_at', s.get('created_at','—')) }}</div>
-  <div class="active-project-status">🟢 Guardado</div>
+  <div class="active-project-updated">{{ tr("Actualizado") }}: {{ s.get('updated_at', s.get('created_at','—')) }}</div>
+  <div class="active-project-status">🟢 {{ tr("Guardado") }}</div>
 </div>
 """,
 
     'seg_cronograma.html': """{% extends "base.html" %}
 {% block sidebar %}
-  <a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">← Volver a sitios</a>
+  <a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">← {{ tr("Volver a sitios") }}</a>
 {% endblock %}
 
 {% block content %}
-  <h2>Cronograma de Seguimiento — Seguridad</h2>
+  <h2>{{ tr("Cronograma de Seguimiento — Seguridad") }}</h2>
 
   <div class="chart-card" style="margin-bottom:16px;">
-    <h3>Filtros</h3>
+    <h3>{{ tr("Filtros") }}</h3>
     <form method="get" id="cron-form">
       <div class="filters-bar" style="margin-bottom:10px;">
         <select name="sitio">
-          <option value="">Sitio: Todos</option>
+          <option value="">{{ tr("Sitio: Todos") }}</option>
           {% for sn in sitios_names %}<option value="{{ sn }}" {{ 'selected' if sitio_f==sn }}>{{ sn }}</option>{% endfor %}
         </select>
         <select name="estado">
-          <option value="">Estado: Todos</option>
+          <option value="">{{ tr("Estado") }}: {{ tr("Todos") }}</option>
           {% for s in FINDING_STATUSES %}<option value="{{ s }}" {{ 'selected' if estado_f==s }}>{{ tr(s) }}</option>{% endfor %}
         </select>
         <select name="severidad">
-          <option value="">Severidad: Todas</option>
+          <option value="">{{ tr("Severidad: Todas") }}</option>
           {% for s in SEVERITIES %}<option value="{{ s }}" {{ 'selected' if severidad_f==s }}>{{ tr(s) }}</option>{% endfor %}
         </select>
       </div>
       <div class="filters-bar">
-        <span class="muted" style="font-size:12px;">Fecha desde</span>
+        <span class="muted" style="font-size:12px;">{{ tr("Fecha desde") }}</span>
         <input type="date" name="date_from" id="cron-from" value="{{ date_from }}">
-        <span class="muted" style="font-size:12px;">Fecha hasta</span>
+        <span class="muted" style="font-size:12px;">{{ tr("Fecha hasta") }}</span>
         <input type="date" name="date_to" id="cron-to" value="{{ date_to }}">
-        <span class="muted" style="font-size:12px;">Rango rápido</span>
+        <span class="muted" style="font-size:12px;">{{ tr("Rango rápido") }}</span>
         <button type="button" class="btn-icon-text" data-days="7">7d</button>
         <button type="button" class="btn-icon-text" data-days="30">30d</button>
         <button type="button" class="btn-icon-text" data-days="90">90d</button>
-        <button type="button" class="btn-icon-text" data-days="0">Todo</button>
-        <button type="submit" class="btn-primary">▶ Aplicar</button>
+        <button type="button" class="btn-icon-text" data-days="0">{{ tr("Todo") }}</button>
+        <button type="submit" class="btn-primary">▶ {{ tr("Aplicar") }}</button>
       </div>
     </form>
   </div>
 
   <div class="chart-card">
-    <h3>Gantt semanal</h3>
+    <h3>{{ tr("Gantt semanal") }}</h3>
     <div class="table-wrap">
       <table class="data-table gantt-table">
         <thead>
           <tr>
-            <th style="min-width:260px;">Área / Hallazgo</th>
+            <th style="min-width:260px;">{{ tr("Área") }} / {{ tr("Hallazgo") }}</th>
             {% for w in weeks %}<th class="{{ 'gantt-current' if w.is_current else '' }}">{{ w.label }}</th>{% endfor %}
           </tr>
         </thead>
@@ -1563,15 +1699,15 @@ Cronograma</a>
           </tr>
           {% endfor %}
           {% if not rows %}
-          <tr><td colspan="{{ weeks|length + 1 }}" class="muted-note">Sin hallazgos en el rango seleccionado.</td></tr>
+          <tr><td colspan="{{ weeks|length + 1 }}" class="muted-note">{{ tr("Sin hallazgos en el rango seleccionado.") }}</td></tr>
           {% endif %}
         </tbody>
       </table>
     </div>
     <div class="gantt-legend">
-      <span><span class="gantt-h gantt-h-abierto">H</span> Abierto</span>
-      <span><span class="gantt-h gantt-h-cerrado">H</span> Cerrado</span>
-      <span><span class="gantt-current-swatch"></span> Semana actual</span>
+      <span><span class="gantt-h gantt-h-abierto">H</span> {{ tr("Abierto") }}</span>
+      <span><span class="gantt-h gantt-h-cerrado">H</span> {{ tr("Cerrado") }}</span>
+      <span><span class="gantt-current-swatch"></span> {{ tr("Semana actual") }}</span>
     </div>
   </div>
 
@@ -1601,38 +1737,38 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
   <div class="sidebar-label">Inspección de Seguridad</div>
   <a href="{{ url_for('seg_sitio_new') }}" class="sidebar-btn primary">
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-  Nuevo sitio</a>
+  {{ tr("Nuevo sitio") }}</a>
   <a href="{{ url_for('seg_cronograma_view') }}" class="sidebar-btn">
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
-  Cronograma</a>
+  {{ tr("Cronograma") }}</a>
 {% endblock %}
 
 {% block content %}
-  <h1 class="page-title">Inspección de Seguridad — Sitios</h1>
-  <p class="muted-note">Recorridos de seguridad y hallazgos de zonas desordenadas, independiente del registro 5S.</p>
+  <h1 class="page-title">{{ tr("Inspección de Seguridad — Sitios") }}</h1>
+  <p class="muted-note">{{ tr("Recorridos de seguridad y hallazgos de zonas desordenadas, independiente del registro 5S.") }}</p>
 
   <div class="kpi-row">
-    <div class="kpi-card"><div class="kpi-value" style="color:{{ NB }}">{{ sitios|length }}</div><div class="kpi-label">Total sitios</div></div>
-    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ total_abiertos }}</div><div class="kpi-label">Hallazgos abiertos</div></div>
-    <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ total_cerrados }}</div><div class="kpi-label">Hallazgos cerrados</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NB }}">{{ sitios|length }}</div><div class="kpi-label">{{ tr("Total sitios") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ total_abiertos }}</div><div class="kpi-label">{{ tr("Hallazgos abiertos") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ total_cerrados }}</div><div class="kpi-label">{{ tr("Hallazgos cerrados") }}</div></div>
   </div>
 
   {% if not sitios %}
-    <p class="muted-note">Sin sitios registrados todavía.</p>
+    <p class="muted-note">{{ tr("Sin sitios registrados todavía.") }}</p>
   {% endif %}
 
   <div class="project-grid">
     {% for s in sitios %}
     <div class="project-card">
-      <div class="area-badge" style="background:{{ NGR }}">Seguridad</div>
+      <div class="area-badge" style="background:{{ NGR }}">{{ tr("Seguridad") }}</div>
       <h3>{{ s.get('name','') }}</h3>
       <p class="muted">{{ s.get('customer','') }} · {{ s.get('site','') }} · {{ s.get('created_at','') }}</p>
-      <p class="muted">{{ s._n_abiertos }} abiertos · {{ s._n_total }} hallazgos totales</p>
+      <p class="muted">{{ s._n_abiertos }} {{ tr("abiertos") }} · {{ s._n_total }} {{ tr("hallazgos totales") }}</p>
       <div class="card-actions">
-        <a href="{{ url_for('seg_sitio_overview', sid=s.id) }}" class="btn-primary">Abrir</a>
-        <a href="{{ url_for('seg_sitio_edit', sid=s.id) }}" class="btn-secondary">Editar</a>
-        <form method="post" action="{{ url_for('seg_sitio_delete', sid=s.id) }}" onsubmit="return confirm('¿Eliminar este sitio de seguridad?');" style="display:inline;">
-          <button type="submit" class="btn-danger">Eliminar</button>
+        <a href="{{ url_for('seg_sitio_overview', sid=s.id) }}" class="btn-primary">{{ tr("Abrir") }}</a>
+        <a href="{{ url_for('seg_sitio_edit', sid=s.id) }}" class="btn-secondary">{{ tr("Editar") }}</a>
+        <form method="post" action="{{ url_for('seg_sitio_delete', sid=s.id) }}" onsubmit="return confirm('{{ tr('¿Eliminar este sitio de seguridad?') }}');" style="display:inline;">
+          <button type="submit" class="btn-danger">{{ tr("Eliminar") }}</button>
         </form>
       </div>
     </div>
@@ -1643,26 +1779,26 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
 
     'seg_sitio_form.html': """{% extends "base.html" %}
 {% block sidebar %}
-  <a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">← Volver a sitios</a>
+  <a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">← {{ tr("Volver a sitios") }}</a>
 {% endblock %}
 
 {% block content %}
   <div class="form-card">
-    <h2>{{ "Editar sitio" if old else "Nuevo sitio" }}</h2>
+    <h2>{{ tr("Editar sitio") if old else tr("Nuevo sitio") }}</h2>
     <form method="post">
-      <label>Nombre del sitio</label>
+      <label>{{ tr("Nombre del sitio") }}</label>
       <input type="text" name="name" value="{{ old.get('name','') }}" required>
-      <label>Sitio / Operación</label>
+      <label>{{ tr("Sitio / Operación") }}</label>
       <input type="text" name="site" value="{{ old.get('site','') }}">
-      <label>Cliente</label>
+      <label>{{ tr("Cliente") }}</label>
       <input type="text" name="customer" value="{{ old.get('customer','') }}">
-      <label>Responsable</label>
+      <label>{{ tr("Responsable") }}</label>
       <input type="text" name="owner" value="{{ old.get('owner','') }}">
-      <label>Alcance / Notas</label>
+      <label>{{ tr("Alcance / Notas") }}</label>
       <textarea name="problem" rows="3">{{ old.get('problem','') }}</textarea>
       <div class="form-actions">
-        <a href="{{ url_for('seg_sitios_list') }}" class="btn-secondary">Cancelar</a>
-        <button type="submit" class="btn-primary">{{ "Guardar" if old else "Crear" }}</button>
+        <a href="{{ url_for('seg_sitios_list') }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        <button type="submit" class="btn-primary">{{ tr("Guardar") if old else tr("Crear") }}</button>
       </div>
     </form>
   </div>
@@ -1674,35 +1810,35 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
 
 {% block content %}
   <div class="project-header">
-    <span class="area-badge" style="background:{{ NGR }}">Seguridad</span>
+    <span class="area-badge" style="background:{{ NGR }}">{{ tr("Seguridad") }}</span>
     <span class="project-name">{{ s.get('name','') }}</span>
     <span class="muted">{{ s.get('customer','') }} · {{ s.get('site','') }}</span>
   </div>
 
   <div class="kpi-row kpi-row-5">
-    <div class="kpi-card"><div class="kpi-value" style="color:{{ NGR }}">{{ stats.total }}</div><div class="kpi-label">Hallazgos totales</div></div>
-    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ stats.abiertos }}</div><div class="kpi-label">Abiertos</div></div>
-    <div class="kpi-card"><div class="kpi-value" style="color:{{ NO }}">{{ stats.en_progreso }}</div><div class="kpi-label">En progreso</div></div>
-    <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ stats.cerrados }}</div><div class="kpi-label">Cerrados</div></div>
-    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ stats.severidad_alta }}</div><div class="kpi-label">Severidad Alta</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NGR }}">{{ stats.total }}</div><div class="kpi-label">{{ tr("Hallazgos totales") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ stats.abiertos }}</div><div class="kpi-label">{{ tr("Abiertos") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NO }}">{{ stats.en_progreso }}</div><div class="kpi-label">{{ tr("En progreso") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ stats.cerrados }}</div><div class="kpi-label">{{ tr("Cerrados") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ stats.severidad_alta }}</div><div class="kpi-label">{{ tr("Severidad Alta") }}</div></div>
   </div>
 
   <div class="two-col">
     <div class="chart-card">
-      <h3>Estado de hallazgos</h3>
+      <h3>{{ tr("Estado de hallazgos") }}</h3>
       {% for est, count in stats.estado_counts.items() %}
       <div class="progress-row">
-        <span class="progress-label">{{ est }}</span>
+        <span class="progress-label">{{ tr(est) }}</span>
         <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.total*100) if stats.total else 0 }}%;background:{{ NG if est=='Cerrado' else (RED if est=='Abierto' else NO) }};"></div></div>
         <span class="progress-value">{{ count }}</span>
       </div>
       {% endfor %}
     </div>
     <div class="chart-card">
-      <h3>Severidad</h3>
+      <h3>{{ tr("Severidad") }}</h3>
       {% for sev, count in stats.severidad_counts.items() %}
       <div class="progress-row">
-        <span class="progress-label">{{ sev }}</span>
+        <span class="progress-label">{{ tr(sev) }}</span>
         <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.total*100) if stats.total else 0 }}%;background:{{ RED if sev=='Alto' else (NO if sev=='Medio' else NG) }};"></div></div>
         <span class="progress-value">{{ count }}</span>
       </div>
@@ -1712,7 +1848,7 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
 
   {% if s.get('problem') %}
   <div class="chart-card" style="margin-top:14px;">
-    <h3>Alcance / Notas</h3>
+    <h3>{{ tr("Alcance / Notas") }}</h3>
     <p style="font-size:13px;">{{ s.get('problem') }}</p>
   </div>
   {% endif %}
@@ -1720,7 +1856,7 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
   {% set recientes = s.get('hallazgos',[])[:4] %}
   {% if recientes %}
   <div class="chart-card" style="margin-top:16px;">
-    <h3>Últimos hallazgos con fotos</h3>
+    <h3>{{ tr("Últimos hallazgos con fotos") }}</h3>
     <div class="evidence-grid">
       {% for h in recientes %}
         {% for foto in h.fotos[:2] %}
@@ -1743,28 +1879,28 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
 
 {% block content %}
   <div class="table-toolbar">
-    <h2>Hallazgos de Seguridad</h2>
-    <a href="{{ url_for('seg_hallazgo_form', sid=s.id) }}" class="btn-primary">+ Nuevo hallazgo</a>
+    <h2>{{ tr("Hallazgos de Seguridad") }}</h2>
+    <a href="{{ url_for('seg_hallazgo_form', sid=s.id) }}" class="btn-primary">{{ tr("+ Nuevo hallazgo") }}</a>
   </div>
 
   <div class="filters-bar">
     <select id="filter-severity">
-      <option value="">Severidad: Todos</option>
-      {% for sv in SEVERITIES %}<option value="{{ sv }}">{{ sv }}</option>{% endfor %}
+      <option value="">{{ tr("Severidad") }}: {{ tr("Todos") }}</option>
+      {% for sv in SEVERITIES %}<option value="{{ sv }}">{{ tr(sv) }}</option>{% endfor %}
     </select>
     <select id="filter-status">
-      <option value="">Estado: Todos</option>
-      {% for st in FINDING_STATUSES %}<option value="{{ st }}">{{ st }}</option>{% endfor %}
+      <option value="">{{ tr("Estado") }}: {{ tr("Todos") }}</option>
+      {% for st in FINDING_STATUSES %}<option value="{{ st }}">{{ tr(st) }}</option>{% endfor %}
     </select>
-    <button type="button" id="btn-clear-filters" class="btn-secondary">🔄 Limpiar filtros</button>
+    <button type="button" id="btn-clear-filters" class="btn-secondary">🔄 {{ tr("Limpiar filtros") }}</button>
   </div>
 
   <div class="table-wrap">
     <table class="data-table" id="hallazgos-table">
       <thead>
         <tr>
-          <th>Fecha</th><th>Zona</th><th>Descripción</th><th>Severidad</th>
-          <th>Responsable</th><th>Fecha compromiso</th><th>Estado</th><th>Fotos</th><th>Acciones</th>
+          <th>{{ tr("Fecha") }}</th><th>{{ tr("Zona") }}</th><th>{{ tr("Descripción") }}</th><th>{{ tr("Severidad") }}</th>
+          <th>{{ tr("Responsable") }}</th><th>{{ tr("Fecha compromiso") }}</th><th>{{ tr("Estado") }}</th><th>{{ tr("Fotos") }}</th><th>{{ tr("Acciones") }}</th>
         </tr>
       </thead>
       <tbody>
@@ -1773,10 +1909,10 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
           <td>{{ h.date }}</td>
           <td>{{ h.area }}</td>
           <td>{{ h.description }}</td>
-          <td><span class="pill {{ 'pill-red' if h.severity=='Alto' else ('pill-orange' if h.severity=='Medio' else 'pill-green') }}">{{ h.severity }}</span></td>
+          <td><span class="pill {{ 'pill-red' if h.severity=='Alto' else ('pill-orange' if h.severity=='Medio' else 'pill-green') }}">{{ tr(h.severity) }}</span></td>
           <td>{{ h.responsible or '-' }}</td>
           <td>{{ h.due_date or '-' }}</td>
-          <td><span class="pill {{ 'pill-green' if h.status=='Cerrado' else ('pill-red' if h.status=='Abierto' else 'pill-blue') }}">{{ h.status }}</span></td>
+          <td><span class="pill {{ 'pill-green' if h.status=='Cerrado' else ('pill-red' if h.status=='Abierto' else 'pill-blue') }}">{{ tr(h.status) }}</span></td>
           <td>
             {% for foto in h.fotos[:3] %}
             <a href="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" target="_blank">📷</a>
@@ -1785,20 +1921,20 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
             {% if not h.fotos %}<span class="muted">—</span>{% endif %}
           </td>
           <td class="actions-cell">
-            <a href="{{ url_for('seg_hallazgo_form', sid=s.id, hid=h.id) }}" class="btn-mini">Editar</a>
+            <a href="{{ url_for('seg_hallazgo_form', sid=s.id, hid=h.id) }}" class="btn-mini">{{ tr("Editar") }}</a>
             {% if h.status != 'Cerrado' %}
             <form method="post" action="{{ url_for('seg_hallazgo_close', sid=s.id, hid=h.id) }}" style="display:inline;">
-              <button type="submit" class="btn-mini" style="background:{{ NG }};">✔ Cerrar</button>
+              <button type="submit" class="btn-mini" style="background:{{ NG }};">✔ {{ tr("Cerrar") }}</button>
             </form>
             {% endif %}
-            <form method="post" action="{{ url_for('seg_hallazgo_delete', sid=s.id, hid=h.id) }}" style="display:inline;" onsubmit="return confirm('¿Eliminar este hallazgo?');">
-              <button type="submit" class="btn-mini btn-mini-danger">Eliminar</button>
+            <form method="post" action="{{ url_for('seg_hallazgo_delete', sid=s.id, hid=h.id) }}" style="display:inline;" onsubmit="return confirm('{{ tr('¿Eliminar este hallazgo?') }}');">
+              <button type="submit" class="btn-mini btn-mini-danger">{{ tr("Eliminar") }}</button>
             </form>
           </td>
         </tr>
         {% endfor %}
         {% if not s.get('hallazgos') %}
-        <tr><td colspan="9" class="muted-note">Sin hallazgos registrados.</td></tr>
+        <tr><td colspan="9" class="muted-note">{{ tr("Sin hallazgos registrados.") }}</td></tr>
         {% endif %}
       </tbody>
     </table>
@@ -1830,66 +1966,66 @@ document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
 
 {% block content %}
   <div class="form-card form-card-wide">
-    <h2>{{ "Editar hallazgo" if old else "Nuevo hallazgo de Seguridad" }}</h2>
-    {% if error %}<p class="error-note">Completa al menos zona y descripción.</p>{% endif %}
+    <h2>{{ tr("Editar hallazgo") if old else tr("Nuevo hallazgo de Seguridad") }}</h2>
+    {% if error %}<p class="error-note">{{ tr("Completa al menos zona y descripción.") }}</p>{% endif %}
     <form method="post" enctype="multipart/form-data">
       <div class="form-row-3">
         <div>
-          <label>Fecha</label>
+          <label>{{ tr("Fecha") }}</label>
           <input type="date" name="date" value="{{ old.get('date', today) }}">
         </div>
         <div>
-          <label>Zona / Área</label>
+          <label>{{ tr("Zona / Área") }}</label>
           <input type="text" name="area" value="{{ old.get('area','') }}" required placeholder="Ej: Bodega, Pasillo B">
         </div>
         <div>
-          <label>Severidad</label>
+          <label>{{ tr("Severidad") }}</label>
           <select name="severity">
-            {% for sv in SEVERITIES %}<option value="{{ sv }}" {{ 'selected' if old.get('severity')==sv }}>{{ sv }}</option>{% endfor %}
+            {% for sv in SEVERITIES %}<option value="{{ sv }}" {{ 'selected' if old.get('severity')==sv }}>{{ tr(sv) }}</option>{% endfor %}
           </select>
         </div>
       </div>
 
-      <label>Descripción del hallazgo</label>
+      <label>{{ tr("Descripción del hallazgo") }}</label>
       <textarea name="description" rows="3" required>{{ old.get('description','') }}</textarea>
 
       <div class="form-row-2">
         <div>
-          <label>Responsable</label>
+          <label>{{ tr("Responsable") }}</label>
           <input type="text" name="responsible" value="{{ old.get('responsible','') }}">
         </div>
         <div>
-          <label>Fecha compromiso</label>
+          <label>{{ tr("Fecha compromiso") }}</label>
           <input type="date" name="due_date" value="{{ old.get('due_date','') }}">
         </div>
       </div>
 
-      <label>Estado</label>
+      <label>{{ tr("Estado") }}</label>
       <select name="status">
-        {% for st in FINDING_STATUSES %}<option value="{{ st }}" {{ 'selected' if old.get('status')==st }}>{{ st }}</option>{% endfor %}
+        {% for st in FINDING_STATUSES %}<option value="{{ st }}" {{ 'selected' if old.get('status')==st }}>{{ tr(st) }}</option>{% endfor %}
       </select>
 
-      <label>Fotos (puedes seleccionar varias a la vez)</label>
+      <label>{{ tr("Fotos (puedes seleccionar varias a la vez)") }}</label>
       <input type="file" name="photos" accept="image/*" multiple capture="environment">
 
       <div class="form-actions">
-        <a href="{{ url_for('seg_hallazgos_list', sid=s.id) }}" class="btn-secondary">Cancelar</a>
-        <button type="submit" class="btn-primary">Guardar</button>
+        <a href="{{ url_for('seg_hallazgos_list', sid=s.id) }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        <button type="submit" class="btn-primary">{{ tr("Guardar") }}</button>
       </div>
     </form>
   </div>
 
   {% if old and old.get('fotos') %}
   <div class="chart-card" style="max-width:760px;">
-    <h3>Fotos de este hallazgo ({{ old.fotos|length }})</h3>
+    <h3>{{ tr("Fotos de este hallazgo") }} ({{ old.fotos|length }})</h3>
     <div class="evidence-grid">
       {% for foto in old.fotos %}
       <div class="evidence-card">
         <a href="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" target="_blank">
           <img src="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" class="evidence-thumb">
         </a>
-        <form method="post" action="{{ url_for('seg_foto_delete', sid=s.id, hid=old.id, foto_id=foto.id) }}" onsubmit="return confirm('¿Eliminar esta foto?');">
-          <button type="submit" class="btn-mini btn-mini-danger" style="margin-top:6px;">Eliminar foto</button>
+        <form method="post" action="{{ url_for('seg_foto_delete', sid=s.id, hid=old.id, foto_id=foto.id) }}" onsubmit="return confirm('{{ tr('¿Eliminar esta foto?') }}');">
+          <button type="submit" class="btn-mini btn-mini-danger" style="margin-top:6px;">{{ tr("Eliminar foto") }}</button>
         </form>
       </div>
       {% endfor %}

@@ -2533,12 +2533,14 @@ SEG_PHOTOS_DIR = DATA_DIR / "seguridad_photos"
 SEG_PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_PHOTO_EXT = {"jpg", "jpeg", "png", "gif", "webp", "heic", "heif"}
 
-# ── Persistencia SQLite ──────────────────────────────────────────────────
-# Reemplaza el JSON de archivo unico para plantas/auditorias/hallazgos/
-# evidencia: cada guardado ahora es una fila individual (INSERT/UPDATE/
-# DELETE), evitando que dos personas guardando casi al mismo tiempo en la
-# misma planta se pisen los cambios entre si.
+# ── Persistencia: PostgreSQL en Render / SQLite local ─────────────────────
+# En Render, define DATABASE_URL y toda la informacion (incluidas las fotos)
+# se guarda en PostgreSQL. En PC/Pydroid, sin DATABASE_URL, la app mantiene
+# compatibilidad con SQLite local.
 import sqlite3
+
+DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
+USING_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 
 _HALLAZGO_COLS = ["date", "area", "pillar", "description", "severity", "status",
                   "corrective_action", "responsible", "due_date", "evidencia"]
@@ -2546,7 +2548,56 @@ _AUDIT_FLAT_COLS = (["fecha", "area", "auditor", "notes", "pct_total", "clasific
                      + [f"pct_{pil}" for pil in PILLARS])
 
 
+class _PgResult:
+    def __init__(self, cursor):
+        self.cursor = cursor
+        self.lastrowid = None
+
+    def fetchone(self):
+        return self.cursor.fetchone()
+
+    def fetchall(self):
+        return self.cursor.fetchall()
+
+    def __iter__(self):
+        return iter(self.cursor.fetchall())
+
+
+class _PgConnection:
+    """Adaptador pequeño para conservar el SQL existente de la app."""
+    def __init__(self):
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        self.raw = psycopg2.connect(DATABASE_URL, sslmode="require")
+        self.RealDictCursor = RealDictCursor
+
+    @staticmethod
+    def _sql(sql):
+        sql = sql.replace("?", "%s")
+        sql = sql.replace("ORDER BY rowid ASC", "ORDER BY id ASC")
+        if "INSERT OR IGNORE INTO" in sql:
+            sql = sql.replace("INSERT OR IGNORE INTO", "INSERT INTO")
+            sql = sql.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+        return sql
+
+    def execute(self, sql, params=()):
+        cur = self.raw.cursor(cursor_factory=self.RealDictCursor)
+        cur.execute(self._sql(sql), params)
+        return _PgResult(cur)
+
+    def commit(self):
+        self.raw.commit()
+
+    def rollback(self):
+        self.raw.rollback()
+
+    def close(self):
+        self.raw.close()
+
+
 def get_db():
+    if USING_POSTGRES:
+        return _PgConnection()
     conn = sqlite3.connect(str(DB_FILE), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
@@ -2557,151 +2608,239 @@ def get_db():
 def init_db():
     audit_pct_cols = ",".join(f"pct_{pil} REAL" for pil in PILLARS)
     conn = get_db()
-    conn.executescript(f"""
+    if USING_POSTGRES:
+        statements = f"""
         CREATE TABLE IF NOT EXISTS plantas (
             id TEXT PRIMARY KEY, name TEXT, site TEXT, customer TEXT, owner TEXT,
             problem TEXT, area TEXT, pais TEXT, areas_json TEXT,
             created_at TEXT, updated_at TEXT
         );
         CREATE TABLE IF NOT EXISTS auditorias (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+            id BIGSERIAL PRIMARY KEY, planta_id TEXT,
             fecha TEXT, area TEXT, auditor TEXT, respuestas_json TEXT, notes TEXT,
             pct_total REAL, {audit_pct_cols}, clasificacion TEXT, evidencia TEXT
         );
         CREATE TABLE IF NOT EXISTS hallazgos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+            id BIGSERIAL PRIMARY KEY, planta_id TEXT,
             date TEXT, area TEXT, pillar TEXT, description TEXT, severity TEXT, status TEXT,
             corrective_action TEXT, responsible TEXT, due_date TEXT, evidencia TEXT
         );
         CREATE TABLE IF NOT EXISTS evidence (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
-            filename TEXT, caption TEXT, date TEXT
+            id BIGSERIAL PRIMARY KEY, planta_id TEXT,
+            filename TEXT, caption TEXT, date TEXT, photo_data BYTEA, mime_type TEXT
         );
         CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY, email TEXT, password_hash TEXT, role TEXT
         );
         CREATE TABLE IF NOT EXISTS catalogo (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, fase TEXT, descripcion TEXT
+            id BIGSERIAL PRIMARY KEY, fase TEXT, descripcion TEXT
         );
         CREATE TABLE IF NOT EXISTS paises_plantas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, pais TEXT, planta TEXT, areas_json TEXT
+            id BIGSERIAL PRIMARY KEY, pais TEXT, planta TEXT, areas_json TEXT
         );
         CREATE TABLE IF NOT EXISTS seg_sitios (
             id TEXT PRIMARY KEY, name TEXT, site TEXT, customer TEXT, owner TEXT,
             problem TEXT, created_at TEXT, updated_at TEXT
         );
         CREATE TABLE IF NOT EXISTS seg_hallazgos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, sitio_id TEXT,
+            id BIGSERIAL PRIMARY KEY, sitio_id TEXT,
             date TEXT, area TEXT, description TEXT, severity TEXT, status TEXT,
             responsible TEXT, due_date TEXT, created_at TEXT
         );
         CREATE TABLE IF NOT EXISTS seg_fotos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, hallazgo_id INTEGER,
-            filename TEXT, caption TEXT, date TEXT
+            id BIGSERIAL PRIMARY KEY, hallazgo_id BIGINT,
+            filename TEXT, caption TEXT, date TEXT, photo_data BYTEA, mime_type TEXT
         );
+        ALTER TABLE evidence ADD COLUMN IF NOT EXISTS photo_data BYTEA;
+        ALTER TABLE evidence ADD COLUMN IF NOT EXISTS mime_type TEXT;
+        ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS photo_data BYTEA;
+        ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS mime_type TEXT;
         CREATE INDEX IF NOT EXISTS idx_seg_hallazgos_sid ON seg_hallazgos(sitio_id);
         CREATE INDEX IF NOT EXISTS idx_seg_fotos_hid ON seg_fotos(hallazgo_id);
         CREATE INDEX IF NOT EXISTS idx_auditorias_pid ON auditorias(planta_id);
         CREATE INDEX IF NOT EXISTS idx_hallazgos_pid ON hallazgos(planta_id);
         CREATE INDEX IF NOT EXISTS idx_evidence_pid ON evidence(planta_id);
-    """)
+        """
+        for stmt in statements.split(";"):
+            if stmt.strip():
+                conn.execute(stmt)
+    else:
+        conn.executescript(f"""
+            CREATE TABLE IF NOT EXISTS plantas (
+                id TEXT PRIMARY KEY, name TEXT, site TEXT, customer TEXT, owner TEXT,
+                problem TEXT, area TEXT, pais TEXT, areas_json TEXT,
+                created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS auditorias (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+                fecha TEXT, area TEXT, auditor TEXT, respuestas_json TEXT, notes TEXT,
+                pct_total REAL, {audit_pct_cols}, clasificacion TEXT, evidencia TEXT
+            );
+            CREATE TABLE IF NOT EXISTS hallazgos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+                date TEXT, area TEXT, pillar TEXT, description TEXT, severity TEXT, status TEXT,
+                corrective_action TEXT, responsible TEXT, due_date TEXT, evidencia TEXT
+            );
+            CREATE TABLE IF NOT EXISTS evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+                filename TEXT, caption TEXT, date TEXT, photo_data BLOB, mime_type TEXT
+            );
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY, email TEXT, password_hash TEXT, role TEXT
+            );
+            CREATE TABLE IF NOT EXISTS catalogo (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, fase TEXT, descripcion TEXT
+            );
+            CREATE TABLE IF NOT EXISTS paises_plantas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, pais TEXT, planta TEXT, areas_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS seg_sitios (
+                id TEXT PRIMARY KEY, name TEXT, site TEXT, customer TEXT, owner TEXT,
+                problem TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS seg_hallazgos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, sitio_id TEXT,
+                date TEXT, area TEXT, description TEXT, severity TEXT, status TEXT,
+                responsible TEXT, due_date TEXT, created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS seg_fotos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, hallazgo_id INTEGER,
+                filename TEXT, caption TEXT, date TEXT, photo_data BLOB, mime_type TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_seg_hallazgos_sid ON seg_hallazgos(sitio_id);
+            CREATE INDEX IF NOT EXISTS idx_seg_fotos_hid ON seg_fotos(hallazgo_id);
+            CREATE INDEX IF NOT EXISTS idx_auditorias_pid ON auditorias(planta_id);
+            CREATE INDEX IF NOT EXISTS idx_hallazgos_pid ON hallazgos(planta_id);
+            CREATE INDEX IF NOT EXISTS idx_evidence_pid ON evidence(planta_id);
+        """)
+        # Compatibilidad con bases SQLite ya creadas antes de esta version.
+        for table, col, coltype in (("evidence", "photo_data", "BLOB"), ("evidence", "mime_type", "TEXT"),
+                                    ("seg_fotos", "photo_data", "BLOB"), ("seg_fotos", "mime_type", "TEXT")):
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            if col not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
     conn.commit()
     conn.close()
 
 
-def migrate_json_to_sqlite_if_needed():
-    """Migracion unica: si SQLite esta vacio y existen los JSON viejos,
-    importa todo para no perder datos ya guardados en produccion."""
+def migrate_legacy_data_if_needed():
+    """Migra automaticamente datos del disco antiguo a PostgreSQL.
+
+    Para una migracion segura en Render: primero desplegar esta version con el
+    Persistent Disk aun conectado y DATA_DIR apuntando al disco. Al arrancar,
+    si PostgreSQL esta vacio, copia SQLite + fotos al DATABASE_URL.
+    """
+    if not USING_POSTGRES:
+        # Conserva la antigua migracion JSON -> SQLite solo en modo local.
+        migrate_json_to_sqlite_if_needed_local()
+        return
+    if not DB_FILE.exists():
+        return
+    pg = get_db()
+    try:
+        if pg.execute("SELECT COUNT(*) AS c FROM plantas").fetchone()["c"] > 0:
+            return
+    finally:
+        pg.close()
+    src = sqlite3.connect(str(DB_FILE))
+    src.row_factory = sqlite3.Row
+    pg = get_db()
+    tables = ["plantas", "auditorias", "hallazgos", "users", "catalogo", "paises_plantas",
+              "seg_sitios", "seg_hallazgos"]
+    try:
+        for table in tables:
+            try:
+                rows = src.execute(f"SELECT * FROM {table}").fetchall()
+            except sqlite3.Error:
+                continue
+            for row in rows:
+                d = dict(row)
+                cols = list(d)
+                vals = [d[c] for c in cols]
+                placeholders = ",".join("?" for _ in cols)
+                pg.execute(f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING", vals)
+
+        # Evidencias 5S: incorpora bytes de las fotos del disco.
+        try:
+            rows = src.execute("SELECT * FROM evidence").fetchall()
+            for row in rows:
+                d = dict(row)
+                photo_path = PHOTOS_DIR / d.get("planta_id", "") / d.get("filename", "")
+                blob = photo_path.read_bytes() if photo_path.exists() else d.get("photo_data")
+                mime = d.get("mime_type") or _mime_from_filename(d.get("filename", ""))
+                pg.execute("INSERT INTO evidence (id,planta_id,filename,caption,date,photo_data,mime_type) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                           (d.get("id"), d.get("planta_id"), d.get("filename"), d.get("caption"), d.get("date"), blob, mime))
+        except sqlite3.Error:
+            pass
+
+        # Fotos de seguridad.
+        try:
+            rows = src.execute("SELECT sf.*, sh.sitio_id FROM seg_fotos sf LEFT JOIN seg_hallazgos sh ON sh.id=sf.hallazgo_id").fetchall()
+            for row in rows:
+                d = dict(row)
+                photo_path = SEG_PHOTOS_DIR / (d.get("sitio_id") or "") / d.get("filename", "")
+                blob = photo_path.read_bytes() if photo_path.exists() else d.get("photo_data")
+                mime = d.get("mime_type") or _mime_from_filename(d.get("filename", ""))
+                pg.execute("INSERT INTO seg_fotos (id,hallazgo_id,filename,caption,date,photo_data,mime_type) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                           (d.get("id"), d.get("hallazgo_id"), d.get("filename"), d.get("caption"), d.get("date"), blob, mime))
+        except sqlite3.Error:
+            pass
+        # Ajusta secuencias seriales despues de importar IDs historicos.
+        for table in ("auditorias", "hallazgos", "evidence", "catalogo", "paises_plantas", "seg_hallazgos", "seg_fotos"):
+            pg.execute(f"SELECT setval(pg_get_serial_sequence('{table}','id'), COALESCE((SELECT MAX(id) FROM {table}), 1), true)")
+        pg.commit()
+        print("[Migración] SQLite y fotografías copiadas a PostgreSQL correctamente.")
+    except Exception:
+        pg.rollback()
+        raise
+    finally:
+        src.close()
+        pg.close()
+
+
+def migrate_json_to_sqlite_if_needed_local():
+    """Compatibilidad con instalaciones antiguas basadas en JSON."""
     conn = get_db()
     existing = conn.execute("SELECT COUNT(*) AS c FROM plantas").fetchone()["c"]
     conn.close()
-    if existing > 0 or not PLANTAS_FILE.exists():
-        pass
-    else:
+    if existing == 0 and PLANTAS_FILE.exists():
         try:
             old_plantas = json.loads(PLANTAS_FILE.read_text(encoding="utf-8"))
         except Exception:
             old_plantas = []
         conn = get_db()
         for p in old_plantas:
-            conn.execute(
-                "INSERT OR IGNORE INTO plantas (id,name,site,customer,owner,problem,area,pais,areas_json,"
-                "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (p.get("id"), p.get("name", ""), p.get("site", ""), p.get("customer", ""), p.get("owner", ""),
-                 p.get("problem", ""), p.get("area", "Logística"), p.get("pais", ""),
-                 json.dumps(p.get("areas", [])), p.get("created_at", ""), p.get("updated_at", "")),
-            )
+            conn.execute("INSERT OR IGNORE INTO plantas (id,name,site,customer,owner,problem,area,pais,areas_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                         (p.get("id"), p.get("name", ""), p.get("site", ""), p.get("customer", ""), p.get("owner", ""), p.get("problem", ""), p.get("area", "Logística"), p.get("pais", ""), json.dumps(p.get("areas", [])), p.get("created_at", ""), p.get("updated_at", "")))
             for a in p.get("auditorias", []):
                 cols = _AUDIT_FLAT_COLS + ["respuestas_json"]
                 vals = [a.get(c, "") for c in _AUDIT_FLAT_COLS] + [json.dumps(a.get("respuestas", []))]
-                conn.execute(
-                    f"INSERT INTO auditorias (planta_id,{','.join(cols)}) VALUES (?,{','.join('?' * len(cols))})",
-                    (p.get("id"), *vals),
-                )
+                conn.execute(f"INSERT INTO auditorias (planta_id,{','.join(cols)}) VALUES (?,{','.join('?' * len(cols))})", (p.get("id"), *vals))
             for h in p.get("hallazgos", []):
-                conn.execute(
-                    f"INSERT INTO hallazgos (planta_id,{','.join(_HALLAZGO_COLS)}) "
-                    f"VALUES (?,{','.join('?' * len(_HALLAZGO_COLS))})",
-                    (p.get("id"), *[h.get(c, "") for c in _HALLAZGO_COLS]),
-                )
+                conn.execute(f"INSERT INTO hallazgos (planta_id,{','.join(_HALLAZGO_COLS)}) VALUES (?,{','.join('?' * len(_HALLAZGO_COLS))})", (p.get("id"), *[h.get(c, "") for c in _HALLAZGO_COLS]))
             for ev in p.get("evidence", []):
-                conn.execute(
-                    "INSERT INTO evidence (planta_id,filename,caption,date) VALUES (?,?,?,?)",
-                    (p.get("id"), ev.get("filename", ""), ev.get("caption", ""), ev.get("date", "")),
-                )
-        conn.commit()
-        conn.close()
-        print(f"[Migración] {len(old_plantas)} planta(s) importada(s) de JSON a SQLite ({DB_FILE})")
+                conn.execute("INSERT INTO evidence (planta_id,filename,caption,date) VALUES (?,?,?,?)", (p.get("id"), ev.get("filename", ""), ev.get("caption", ""), ev.get("date", "")))
+        conn.commit(); conn.close()
+    for filename, table, loader in (("usuarios_5s.json", "users", None), ("catalogo_5s.json", "catalogo", None), ("paises_plantas.json", "paises_plantas", None)):
+        old_file = DATA_DIR / filename
+        conn = get_db(); count = conn.execute(f"SELECT COUNT(*) c FROM {table}").fetchone()["c"]; conn.close()
+        if count or not old_file.exists():
+            continue
+        try: data = json.loads(old_file.read_text(encoding="utf-8"))
+        except Exception: continue
+        conn = get_db()
+        if table == "users":
+            for u in data: conn.execute("INSERT OR IGNORE INTO users (id,email,password_hash,role) VALUES (?,?,?,?)", (u.get("id"), u.get("email"), u.get("password_hash"), u.get("role", "user")))
+        elif table == "catalogo":
+            for c in data: conn.execute("INSERT INTO catalogo (fase,descripcion) VALUES (?,?)", (c.get("fase", ""), c.get("descripcion", "")))
+        else:
+            for r in data: conn.execute("INSERT INTO paises_plantas (pais,planta,areas_json) VALUES (?,?,?)", (r.get("pais", ""), r.get("planta", ""), json.dumps(r.get("areas", []))))
+        conn.commit(); conn.close()
 
-    # Usuarios, catalogo y paises_plantas (migracion independiente, uno por uno)
-    conn = get_db()
-    has_users = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-    conn.close()
-    old_users_file = DATA_DIR / "usuarios_5s.json"
-    if has_users == 0 and old_users_file.exists():
-        try:
-            old_users = json.loads(old_users_file.read_text(encoding="utf-8"))
-            conn = get_db()
-            for u in old_users:
-                conn.execute("INSERT OR IGNORE INTO users (id,email,password_hash,role) VALUES (?,?,?,?)",
-                             (u.get("id"), u.get("email"), u.get("password_hash"), u.get("role", "user")))
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
 
-    conn = get_db()
-    has_cat = conn.execute("SELECT COUNT(*) c FROM catalogo").fetchone()["c"]
-    conn.close()
-    old_cat_file = DATA_DIR / "catalogo_5s.json"
-    if has_cat == 0 and old_cat_file.exists():
-        try:
-            old_cat = json.loads(old_cat_file.read_text(encoding="utf-8"))
-            conn = get_db()
-            for c in old_cat:
-                conn.execute("INSERT INTO catalogo (fase,descripcion) VALUES (?,?)",
-                             (c.get("fase", ""), c.get("descripcion", "")))
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-
-    conn = get_db()
-    has_pp = conn.execute("SELECT COUNT(*) c FROM paises_plantas").fetchone()["c"]
-    conn.close()
-    old_pp_file = DATA_DIR / "paises_plantas.json"
-    if has_pp == 0 and old_pp_file.exists():
-        try:
-            old_pp = json.loads(old_pp_file.read_text(encoding="utf-8"))
-            conn = get_db()
-            for r in old_pp:
-                conn.execute("INSERT INTO paises_plantas (pais,planta,areas_json) VALUES (?,?,?)",
-                             (r.get("pais", ""), r.get("planta", ""), json.dumps(r.get("areas", []))))
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-
+def _mime_from_filename(filename):
+    import mimetypes
+    return mimetypes.guess_type(filename or "")[0] or "application/octet-stream"
 
 def _nth_row_id(conn, table, pid, idx, pid_col="planta_id"):
     row = conn.execute(
@@ -2735,7 +2874,7 @@ def get_planta_dict(pid):
     p["hallazgos"] = [dict(r) for r in conn.execute(
         "SELECT * FROM hallazgos WHERE planta_id=? ORDER BY id", (pid,))]
     p["evidence"] = [dict(r) for r in conn.execute(
-        "SELECT * FROM evidence WHERE planta_id=? ORDER BY id", (pid,))]
+        "SELECT id,planta_id,filename,caption,date,mime_type FROM evidence WHERE planta_id=? ORDER BY id", (pid,))]
     conn.close()
     return p
 
@@ -2871,13 +3010,20 @@ def bulk_delete_hallazgos_db(pid, idxs):
     touch_planta_db(pid)
 
 
-def add_evidence_db(pid, filename, caption, ev_date):
+def add_evidence_db(pid, filename, caption, ev_date, photo_data=None, mime_type=None):
     conn = get_db()
-    conn.execute("INSERT INTO evidence (planta_id,filename,caption,date) VALUES (?,?,?,?)",
-                 (pid, filename, caption, ev_date))
+    conn.execute("INSERT INTO evidence (planta_id,filename,caption,date,photo_data,mime_type) VALUES (?,?,?,?,?,?)",
+                 (pid, filename, caption, ev_date, photo_data, mime_type or _mime_from_filename(filename)))
     conn.commit()
     conn.close()
     touch_planta_db(pid)
+
+
+def get_evidence_blob(pid, filename):
+    conn = get_db()
+    row = conn.execute("SELECT photo_data,mime_type FROM evidence WHERE planta_id=? AND filename=? ORDER BY id DESC LIMIT 1", (pid, filename)).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def delete_evidence_db(pid, filename):
@@ -2972,7 +3118,7 @@ def get_seg_sitio(sid):
         "SELECT * FROM seg_hallazgos WHERE sitio_id=? ORDER BY id DESC", (sid,))]
     for h in s["hallazgos"]:
         h["fotos"] = [dict(r) for r in conn.execute(
-            "SELECT * FROM seg_fotos WHERE hallazgo_id=? ORDER BY id", (h["id"],))]
+            "SELECT id,hallazgo_id,filename,caption,date,mime_type FROM seg_fotos WHERE hallazgo_id=? ORDER BY id", (h["id"],))]
     conn.close()
     return s
 
@@ -3019,14 +3165,17 @@ def delete_seg_sitio_db(sid):
 
 def add_seg_hallazgo_db(sid, item):
     conn = get_db()
-    cur = conn.execute(
-        "INSERT INTO seg_hallazgos (sitio_id,date,area,description,severity,status,responsible,"
-        "due_date,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        (sid, item.get("date", ""), item.get("area", ""), item.get("description", ""),
-         item.get("severity", ""), item.get("status", ""), item.get("responsible", ""),
-         item.get("due_date", ""), datetime.now().strftime("%d/%m/%Y %H:%M")),
-    )
-    new_id = cur.lastrowid
+    sql = ("INSERT INTO seg_hallazgos (sitio_id,date,area,description,severity,status,responsible,"
+           "due_date,created_at) VALUES (?,?,?,?,?,?,?,?,?)")
+    params = (sid, item.get("date", ""), item.get("area", ""), item.get("description", ""),
+              item.get("severity", ""), item.get("status", ""), item.get("responsible", ""),
+              item.get("due_date", ""), datetime.now().strftime("%d/%m/%Y %H:%M"))
+    if USING_POSTGRES:
+        row = conn.execute(sql + " RETURNING id", params).fetchone()
+        new_id = row["id"]
+    else:
+        cur = conn.execute(sql, params)
+        new_id = cur.lastrowid
     conn.commit()
     conn.close()
     touch_seg_sitio(sid)
@@ -3068,17 +3217,24 @@ def get_seg_hallazgo(hid):
         return None
     h = dict(row)
     h["fotos"] = [dict(r) for r in conn.execute(
-        "SELECT * FROM seg_fotos WHERE hallazgo_id=? ORDER BY id", (hid,))]
+        "SELECT id,hallazgo_id,filename,caption,date,mime_type FROM seg_fotos WHERE hallazgo_id=? ORDER BY id", (hid,))]
     conn.close()
     return h
 
 
-def add_seg_foto_db(hid, filename, caption):
+def add_seg_foto_db(hid, filename, caption, photo_data=None, mime_type=None):
     conn = get_db()
-    conn.execute("INSERT INTO seg_fotos (hallazgo_id,filename,caption,date) VALUES (?,?,?,?)",
-                 (hid, filename, caption, date.today().isoformat()))
+    conn.execute("INSERT INTO seg_fotos (hallazgo_id,filename,caption,date,photo_data,mime_type) VALUES (?,?,?,?,?,?)",
+                 (hid, filename, caption, date.today().isoformat(), photo_data, mime_type or _mime_from_filename(filename)))
     conn.commit()
     conn.close()
+
+
+def get_seg_foto_blob(sid, filename):
+    conn = get_db()
+    row = conn.execute("SELECT sf.photo_data,sf.mime_type FROM seg_fotos sf JOIN seg_hallazgos sh ON sh.id=sf.hallazgo_id WHERE sh.sitio_id=? AND sf.filename=? ORDER BY sf.id DESC LIMIT 1", (sid, filename)).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def delete_seg_foto_db(foto_id):
@@ -3091,21 +3247,17 @@ def delete_seg_foto_db(foto_id):
 
 
 def save_seg_photos(sid, hid, files):
-    """Guarda una o varias fotos subidas para un hallazgo de seguridad."""
+    """Guarda fotos directamente en la base de datos persistente."""
     saved = []
-    sitio_photo_dir = SEG_PHOTOS_DIR / sid
-    sitio_photo_dir.mkdir(parents=True, exist_ok=True)
     for file in files:
         if not file or not file.filename:
             continue
         ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
         if ext not in ALLOWED_PHOTO_EXT:
             continue
-        unique_name = secure_filename(
-            f"seg_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=5))}.{ext}"
-        )
-        file.save(str(sitio_photo_dir / unique_name))
-        add_seg_foto_db(hid, unique_name, "")
+        unique_name = secure_filename(f"seg_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=5))}.{ext}")
+        blob = file.read()
+        add_seg_foto_db(hid, unique_name, "", blob, file.mimetype or _mime_from_filename(unique_name))
         saved.append(unique_name)
     return saved
 
@@ -3115,7 +3267,7 @@ app.jinja_loader = DictLoader(TEMPLATES)
 app.secret_key = os.environ.get("SECRET_KEY", "nefab-5s-web-dev-only")
 
 init_db()
-migrate_json_to_sqlite_if_needed()
+migrate_legacy_data_if_needed()
 
 
 app.jinja_env.globals.update(
@@ -3550,15 +3702,11 @@ def auditoria_form(pid):
         if file and file.filename:
             ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
             if ext in ALLOWED_PHOTO_EXT:
-                planta_photo_dir = PHOTOS_DIR / pid
-                planta_photo_dir.mkdir(parents=True, exist_ok=True)
-                unique_name = secure_filename(
-                    f"audit_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}.{ext}"
-                )
-                file.save(str(planta_photo_dir / unique_name))
+                unique_name = secure_filename(f"audit_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}.{ext}")
+                blob = file.read()
                 item["evidencia"] = unique_name
                 add_evidence_db(pid, unique_name, f"Auditoría {item['fecha']} — {item.get('area','')}",
-                                 date.today().isoformat())
+                                 date.today().isoformat(), blob, file.mimetype)
 
         if idx is not None:
             update_auditoria_db(pid, idx, item)
@@ -3610,16 +3758,12 @@ def hallazgo_form(pid):
         if file and file.filename:
             ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
             if ext in ALLOWED_PHOTO_EXT:
-                planta_photo_dir = PHOTOS_DIR / pid
-                planta_photo_dir.mkdir(parents=True, exist_ok=True)
-                unique_name = secure_filename(
-                    f"hallazgo_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}.{ext}"
-                )
-                file.save(str(planta_photo_dir / unique_name))
+                unique_name = secure_filename(f"hallazgo_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}.{ext}")
+                blob = file.read()
                 item["evidencia"] = unique_name
                 add_evidence_db(pid, unique_name,
                                  f"Hallazgo — {item.get('area','')}: {item.get('description','')[:60]}",
-                                 date.today().isoformat())
+                                 date.today().isoformat(), blob, file.mimetype)
 
         if idx is not None:
             update_hallazgo_db(pid, idx, item)
@@ -3839,25 +3983,21 @@ def evidencia_upload(pid):
     if ext not in ALLOWED_PHOTO_EXT:
         return redirect(url_for("planta_evidencia", pid=pid))
 
-    planta_photo_dir = PHOTOS_DIR / pid
-    planta_photo_dir.mkdir(parents=True, exist_ok=True)
-
     unique_name = f"{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}.{ext}"
     safe_name = secure_filename(unique_name)
-    file.save(str(planta_photo_dir / safe_name))
-
-    add_evidence_db(pid, safe_name, request.form.get("caption", "").strip(), date.today().isoformat())
+    blob = file.read()
+    add_evidence_db(pid, safe_name, request.form.get("caption", "").strip(), date.today().isoformat(), blob, file.mimetype)
     return redirect(url_for("planta_evidencia", pid=pid))
 
 
 @app.route("/planta/<pid>/evidencia/photo/<filename>")
 @login_required
 def evidencia_photo(pid, filename):
-    planta_photo_dir = PHOTOS_DIR / pid
     safe_name = secure_filename(filename)
-    if not (planta_photo_dir / safe_name).exists():
+    row = get_evidence_blob(pid, safe_name)
+    if not row or not row.get("photo_data"):
         abort(404)
-    return send_from_directory(str(planta_photo_dir), safe_name)
+    return Response(bytes(row["photo_data"]), mimetype=row.get("mime_type") or _mime_from_filename(safe_name))
 
 
 @app.route("/planta/<pid>/evidencia/<filename>/delete", methods=["POST"])
@@ -3865,10 +4005,6 @@ def evidencia_photo(pid, filename):
 def evidencia_delete(pid, filename):
     safe_name = secure_filename(filename)
     delete_evidence_db(pid, safe_name)
-    try:
-        (PHOTOS_DIR / pid / safe_name).unlink(missing_ok=True)
-    except Exception:
-        pass
     return redirect(url_for("planta_evidencia", pid=pid))
 
 
@@ -4206,10 +4342,17 @@ def generate_pdf_report(p):
                 pdf.add_page(orientation="P")
                 _pdf_header(pdf, "Evidencia fotográfica (cont.)")
                 x, y = 10, 22
-            photo_path = PHOTOS_DIR / p.get("id", "") / ev.get("filename", "")
             try:
-                if photo_path.exists():
-                    pdf.image(str(photo_path), x=x, y=y, w=col_w, h=col_h - 12)
+                blob_row = get_evidence_blob(p.get("id", ""), ev.get("filename", ""))
+                if blob_row and blob_row.get("photo_data"):
+                    suffix = Path(ev.get("filename", "photo.jpg")).suffix or ".jpg"
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+                        tf.write(bytes(blob_row["photo_data"]))
+                        tmp_name = tf.name
+                    try:
+                        pdf.image(tmp_name, x=x, y=y, w=col_w, h=col_h - 12)
+                    finally:
+                        Path(tmp_name).unlink(missing_ok=True)
             except Exception:
                 pass
             pdf.set_xy(x, y + col_h - 11)
@@ -4419,13 +4562,6 @@ def seg_hallazgo_form(sid):
 @app.route("/seguridad/sitios/<sid>/hallazgos/<int:hid>/delete", methods=["POST"])
 @login_required
 def seg_hallazgo_delete(sid, hid):
-    h = get_seg_hallazgo(hid)
-    if h:
-        for foto in h.get("fotos", []):
-            try:
-                (SEG_PHOTOS_DIR / sid / foto["filename"]).unlink(missing_ok=True)
-            except Exception:
-                pass
     delete_seg_hallazgo_db(hid)
     return redirect(url_for("seg_hallazgos_list", sid=sid))
 
@@ -4440,22 +4576,17 @@ def seg_hallazgo_close(sid, hid):
 @app.route("/seguridad/sitios/<sid>/fotos/<filename>")
 @login_required
 def seg_foto(sid, filename):
-    sitio_photo_dir = SEG_PHOTOS_DIR / sid
     safe_name = secure_filename(filename)
-    if not (sitio_photo_dir / safe_name).exists():
+    row = get_seg_foto_blob(sid, safe_name)
+    if not row or not row.get("photo_data"):
         abort(404)
-    return send_from_directory(str(sitio_photo_dir), safe_name)
+    return Response(bytes(row["photo_data"]), mimetype=row.get("mime_type") or _mime_from_filename(safe_name))
 
 
 @app.route("/seguridad/sitios/<sid>/hallazgos/<int:hid>/fotos/<int:foto_id>/delete", methods=["POST"])
 @login_required
 def seg_foto_delete(sid, hid, foto_id):
-    foto = delete_seg_foto_db(foto_id)
-    if foto:
-        try:
-            (SEG_PHOTOS_DIR / sid / foto["filename"]).unlink(missing_ok=True)
-        except Exception:
-            pass
+    delete_seg_foto_db(foto_id)
     return redirect(url_for("seg_hallazgo_form", sid=sid, hid=hid))
 
 

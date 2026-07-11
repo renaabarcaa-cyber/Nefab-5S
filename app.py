@@ -327,6 +327,12 @@ TEMPLATES = {
   <div class="topbar-left">
     <img src="/logo.png" alt="Nefab" class="brand-logo">
     <span class="app-name">Nefab 5S<small>Auditorías y Hallazgos</small></span>
+    {% if current_user %}
+    <div class="project-switch">
+      <a href="{{ url_for('plantas_list') }}" class="project-switch-btn {{ 'active' if project=='5s' else '' }}">🧹 5S</a>
+      <a href="{{ url_for('seg_sitios_list') }}" class="project-switch-btn {{ 'active' if project=='seguridad' else '' }}">🦺 Seguridad</a>
+    </div>
+    {% endif %}
   </div>
   <div class="topbar-right">
     {% if current_user %}
@@ -412,7 +418,6 @@ TEMPLATES = {
   <a href="{{ url_for('plantas_list') }}" class="sidebar-btn">← {{ tr("Volver a plantas") }}</a>
   <div class="sidebar-label">Administración</div>
   <a href="{{ url_for('admin_users') }}" class="sidebar-btn active">👤 Usuarios</a>
-  <a href="{{ url_for('descargar_bd') }}" class="sidebar-btn">⬇ Descargar Base de Datos</a>
 {% endblock %}
 
 {% block content %}
@@ -768,9 +773,6 @@ Usuarios</a>
   <a href="{{ url_for('admin_users') }}" class="sidebar-btn">
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
   Usuarios</a>
-  <a href="{{ url_for('descargar_bd') }}" class="sidebar-btn">
-  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-  Descargar Base de Datos</a>
   {% endif %}
 {% endblock %}
 
@@ -1470,6 +1472,325 @@ Usuarios</a>
   </div>
 {% endblock %}
 """,
+
+    '_sidebar_seg_sitio.html': """<a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg>
+Volver a sitios</a>
+<div class="sidebar-label">{{ s.get('name','') }}</div>
+<div class="sidebar-label">Secciones del sitio</div>
+<a href="{{ url_for('seg_sitio_overview', sid=s.id) }}" class="sidebar-btn {{ 'active' if active=='Inicio' else '' }}">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l3-4"/><circle cx="12" cy="15" r="1"/></svg>
+Inicio</a>
+<a href="{{ url_for('seg_hallazgos_list', sid=s.id) }}" class="sidebar-btn {{ 'active' if active=='Hallazgos' else '' }}">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none"/></svg>
+Hallazgos</a>
+<div class="active-project-panel">
+  <div class="active-project-label">Sitio activo</div>
+  <div class="active-project-name">{{ s.get('name','') }}</div>
+  <div class="active-project-updated">Actualizado: {{ s.get('updated_at', s.get('created_at','—')) }}</div>
+  <div class="active-project-status">🟢 Guardado</div>
+</div>
+""",
+
+    'seg_sitios_list.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <div class="sidebar-label">Inspección de Seguridad</div>
+  <a href="{{ url_for('seg_sitio_new') }}" class="sidebar-btn primary">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+  Nuevo sitio</a>
+{% endblock %}
+
+{% block content %}
+  <h1 class="page-title">🦺 Inspección de Seguridad — Sitios</h1>
+  <p class="muted-note">Recorridos de seguridad y hallazgos de zonas desordenadas, independiente del registro 5S.</p>
+
+  <div class="kpi-row">
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NB }}">{{ sitios|length }}</div><div class="kpi-label">Total sitios</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ total_abiertos }}</div><div class="kpi-label">Hallazgos abiertos</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ total_cerrados }}</div><div class="kpi-label">Hallazgos cerrados</div></div>
+  </div>
+
+  {% if not sitios %}
+    <p class="muted-note">Sin sitios registrados todavía.</p>
+  {% endif %}
+
+  <div class="project-grid">
+    {% for s in sitios %}
+    <div class="project-card">
+      <div class="area-badge" style="background:{{ NGR }}">Seguridad</div>
+      <h3>{{ s.get('name','') }}</h3>
+      <p class="muted">{{ s.get('customer','') }} · {{ s.get('site','') }} · {{ s.get('created_at','') }}</p>
+      <p class="muted">{{ s._n_abiertos }} abiertos · {{ s._n_total }} hallazgos totales</p>
+      <div class="card-actions">
+        <a href="{{ url_for('seg_sitio_overview', sid=s.id) }}" class="btn-primary">Abrir</a>
+        <a href="{{ url_for('seg_sitio_edit', sid=s.id) }}" class="btn-secondary">Editar</a>
+        <form method="post" action="{{ url_for('seg_sitio_delete', sid=s.id) }}" onsubmit="return confirm('¿Eliminar este sitio de seguridad?');" style="display:inline;">
+          <button type="submit" class="btn-danger">Eliminar</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+{% endblock %}
+""",
+
+    'seg_sitio_form.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">← Volver a sitios</a>
+{% endblock %}
+
+{% block content %}
+  <div class="form-card">
+    <h2>{{ "Editar sitio" if old else "Nuevo sitio" }}</h2>
+    <form method="post">
+      <label>Nombre del sitio</label>
+      <input type="text" name="name" value="{{ old.get('name','') }}" required>
+      <label>Sitio / Operación</label>
+      <input type="text" name="site" value="{{ old.get('site','') }}">
+      <label>Cliente</label>
+      <input type="text" name="customer" value="{{ old.get('customer','') }}">
+      <label>Responsable</label>
+      <input type="text" name="owner" value="{{ old.get('owner','') }}">
+      <label>Alcance / Notas</label>
+      <textarea name="problem" rows="3">{{ old.get('problem','') }}</textarea>
+      <div class="form-actions">
+        <a href="{{ url_for('seg_sitios_list') }}" class="btn-secondary">Cancelar</a>
+        <button type="submit" class="btn-primary">{{ "Guardar" if old else "Crear" }}</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}
+""",
+
+    'seg_sitio_overview.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_seg_sitio.html" %}{% endblock %}
+
+{% block content %}
+  <div class="project-header">
+    <span class="area-badge" style="background:{{ NGR }}">Seguridad</span>
+    <span class="project-name">{{ s.get('name','') }}</span>
+    <span class="muted">{{ s.get('customer','') }} · {{ s.get('site','') }}</span>
+  </div>
+
+  <div class="kpi-row kpi-row-5">
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NGR }}">{{ stats.total }}</div><div class="kpi-label">Hallazgos totales</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ stats.abiertos }}</div><div class="kpi-label">Abiertos</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NO }}">{{ stats.en_progreso }}</div><div class="kpi-label">En progreso</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ stats.cerrados }}</div><div class="kpi-label">Cerrados</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ stats.severidad_alta }}</div><div class="kpi-label">Severidad Alta</div></div>
+  </div>
+
+  <div class="two-col">
+    <div class="chart-card">
+      <h3>Estado de hallazgos</h3>
+      {% for est, count in stats.estado_counts.items() %}
+      <div class="progress-row">
+        <span class="progress-label">{{ est }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.total*100) if stats.total else 0 }}%;background:{{ NG if est=='Cerrado' else (RED if est=='Abierto' else NO) }};"></div></div>
+        <span class="progress-value">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="chart-card">
+      <h3>Severidad</h3>
+      {% for sev, count in stats.severidad_counts.items() %}
+      <div class="progress-row">
+        <span class="progress-label">{{ sev }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.total*100) if stats.total else 0 }}%;background:{{ RED if sev=='Alto' else (NO if sev=='Medio' else NG) }};"></div></div>
+        <span class="progress-value">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if s.get('problem') %}
+  <div class="chart-card" style="margin-top:14px;">
+    <h3>Alcance / Notas</h3>
+    <p style="font-size:13px;">{{ s.get('problem') }}</p>
+  </div>
+  {% endif %}
+
+  {% set recientes = s.get('hallazgos',[])[:4] %}
+  {% if recientes %}
+  <div class="chart-card" style="margin-top:16px;">
+    <h3>Últimos hallazgos con fotos</h3>
+    <div class="evidence-grid">
+      {% for h in recientes %}
+        {% for foto in h.fotos[:2] %}
+        <div class="evidence-card">
+          <a href="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" target="_blank">
+            <img src="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" class="evidence-thumb">
+          </a>
+          <div class="evidence-caption">{{ h.area }}: {{ h.description[:40] }}</div>
+        </div>
+        {% endfor %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+{% endblock %}
+""",
+
+    'seg_hallazgos_list.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_seg_sitio.html" %}{% endblock %}
+
+{% block content %}
+  <div class="table-toolbar">
+    <h2>Hallazgos de Seguridad</h2>
+    <a href="{{ url_for('seg_hallazgo_form', sid=s.id) }}" class="btn-primary">+ Nuevo hallazgo</a>
+  </div>
+
+  <div class="filters-bar">
+    <select id="filter-severity">
+      <option value="">Severidad: Todos</option>
+      {% for sv in SEVERITIES %}<option value="{{ sv }}">{{ sv }}</option>{% endfor %}
+    </select>
+    <select id="filter-status">
+      <option value="">Estado: Todos</option>
+      {% for st in FINDING_STATUSES %}<option value="{{ st }}">{{ st }}</option>{% endfor %}
+    </select>
+    <button type="button" id="btn-clear-filters" class="btn-secondary">🔄 Limpiar filtros</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data-table" id="hallazgos-table">
+      <thead>
+        <tr>
+          <th>Fecha</th><th>Zona</th><th>Descripción</th><th>Severidad</th>
+          <th>Responsable</th><th>Fecha compromiso</th><th>Estado</th><th>Fotos</th><th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in s.get('hallazgos',[]) %}
+        <tr data-severity="{{ h.severity }}" data-status="{{ h.status }}">
+          <td>{{ h.date }}</td>
+          <td>{{ h.area }}</td>
+          <td>{{ h.description }}</td>
+          <td><span class="pill {{ 'pill-red' if h.severity=='Alto' else ('pill-orange' if h.severity=='Medio' else 'pill-green') }}">{{ h.severity }}</span></td>
+          <td>{{ h.responsible or '-' }}</td>
+          <td>{{ h.due_date or '-' }}</td>
+          <td><span class="pill {{ 'pill-green' if h.status=='Cerrado' else ('pill-red' if h.status=='Abierto' else 'pill-blue') }}">{{ h.status }}</span></td>
+          <td>
+            {% for foto in h.fotos[:3] %}
+            <a href="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" target="_blank">📷</a>
+            {% endfor %}
+            {% if h.fotos|length > 3 %}<span class="muted">+{{ h.fotos|length - 3 }}</span>{% endif %}
+            {% if not h.fotos %}<span class="muted">—</span>{% endif %}
+          </td>
+          <td class="actions-cell">
+            <a href="{{ url_for('seg_hallazgo_form', sid=s.id, hid=h.id) }}" class="btn-mini">Editar</a>
+            {% if h.status != 'Cerrado' %}
+            <form method="post" action="{{ url_for('seg_hallazgo_close', sid=s.id, hid=h.id) }}" style="display:inline;">
+              <button type="submit" class="btn-mini" style="background:{{ NG }};">✔ Cerrar</button>
+            </form>
+            {% endif %}
+            <form method="post" action="{{ url_for('seg_hallazgo_delete', sid=s.id, hid=h.id) }}" style="display:inline;" onsubmit="return confirm('¿Eliminar este hallazgo?');">
+              <button type="submit" class="btn-mini btn-mini-danger">Eliminar</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not s.get('hallazgos') %}
+        <tr><td colspan="9" class="muted-note">Sin hallazgos registrados.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+<script>
+(function(){
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#hallazgos-table tbody tr[data-status]'));
+  var fSeverity = document.getElementById('filter-severity');
+  var fStatus = document.getElementById('filter-status');
+  function applyFilters(){
+    var sev = fSeverity.value, st = fStatus.value;
+    rows.forEach(function(row){
+      var show = (!sev || row.dataset.severity === sev) && (!st || row.dataset.status === st);
+      row.style.display = show ? '' : 'none';
+    });
+  }
+  [fSeverity, fStatus].forEach(function(el){ el.addEventListener('change', applyFilters); });
+  document.getElementById('btn-clear-filters').addEventListener('click', function(){
+    fSeverity.value=''; fStatus.value=''; applyFilters();
+  });
+})();
+</script>
+{% endblock %}
+""",
+
+    'seg_hallazgo_form.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_seg_sitio.html" %}{% endblock %}
+
+{% block content %}
+  <div class="form-card form-card-wide">
+    <h2>{{ "Editar hallazgo" if old else "Nuevo hallazgo de Seguridad" }}</h2>
+    {% if error %}<p class="error-note">Completa al menos zona y descripción.</p>{% endif %}
+    <form method="post" enctype="multipart/form-data">
+      <div class="form-row-3">
+        <div>
+          <label>Fecha</label>
+          <input type="date" name="date" value="{{ old.get('date', today) }}">
+        </div>
+        <div>
+          <label>Zona / Área</label>
+          <input type="text" name="area" value="{{ old.get('area','') }}" required placeholder="Ej: Bodega, Pasillo B">
+        </div>
+        <div>
+          <label>Severidad</label>
+          <select name="severity">
+            {% for sv in SEVERITIES %}<option value="{{ sv }}" {{ 'selected' if old.get('severity')==sv }}>{{ sv }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <label>Descripción del hallazgo</label>
+      <textarea name="description" rows="3" required>{{ old.get('description','') }}</textarea>
+
+      <div class="form-row-2">
+        <div>
+          <label>Responsable</label>
+          <input type="text" name="responsible" value="{{ old.get('responsible','') }}">
+        </div>
+        <div>
+          <label>Fecha compromiso</label>
+          <input type="date" name="due_date" value="{{ old.get('due_date','') }}">
+        </div>
+      </div>
+
+      <label>Estado</label>
+      <select name="status">
+        {% for st in FINDING_STATUSES %}<option value="{{ st }}" {{ 'selected' if old.get('status')==st }}>{{ st }}</option>{% endfor %}
+      </select>
+
+      <label>Fotos (puedes seleccionar varias a la vez)</label>
+      <input type="file" name="photos" accept="image/*" multiple capture="environment">
+
+      <div class="form-actions">
+        <a href="{{ url_for('seg_hallazgos_list', sid=s.id) }}" class="btn-secondary">Cancelar</a>
+        <button type="submit" class="btn-primary">Guardar</button>
+      </div>
+    </form>
+  </div>
+
+  {% if old and old.get('fotos') %}
+  <div class="chart-card" style="max-width:760px;">
+    <h3>Fotos de este hallazgo ({{ old.fotos|length }})</h3>
+    <div class="evidence-grid">
+      {% for foto in old.fotos %}
+      <div class="evidence-card">
+        <a href="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" target="_blank">
+          <img src="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" class="evidence-thumb">
+        </a>
+        <form method="post" action="{{ url_for('seg_foto_delete', sid=s.id, hid=old.id, foto_id=foto.id) }}" onsubmit="return confirm('¿Eliminar esta foto?');">
+          <button type="submit" class="btn-mini btn-mini-danger" style="margin-top:6px;">Eliminar foto</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+{% endblock %}
+""",
 }
 
 
@@ -1692,6 +2013,10 @@ a{text-decoration:none;color:inherit;}
 .brand-logo{height:26px;width:auto;display:block;filter:brightness(0) invert(1);}
 .brand small{display:block;font-size:7px;color:rgba(255,255,255,0.65);font-weight:400;letter-spacing:1px;}
 .app-name{font-weight:600;font-size:14px;color:#fff;border-left:1px solid rgba(255,255,255,0.25);padding-left:10px;white-space:nowrap;}
+.project-switch{display:flex;gap:4px;margin-left:14px;background:rgba(255,255,255,0.1);border-radius:20px;padding:3px;}
+.project-switch-btn{padding:5px 12px;border-radius:16px;font-size:12px;font-weight:600;color:rgba(255,255,255,0.75);white-space:nowrap;}
+.project-switch-btn:hover{color:#fff;}
+.project-switch-btn.active{background:var(--orange);color:#fff;}
 .app-name small{display:block;font-size:11px;color:rgba(255,255,255,0.65);font-weight:400;}
 .topbar-right{display:flex;align-items:center;gap:10px;flex-shrink:0;}
 .lang-select{background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.3);
@@ -1923,6 +2248,8 @@ a{text-decoration:none;color:inherit;}
   .form-row, .form-row-2, .form-row-3{grid-template-columns:1fr;}
   .two-col{grid-template-columns:1fr;}
   .app-name{display:none;}
+  .project-switch{margin-left:0;}
+  .project-switch-btn{padding:5px 8px;font-size:11px;}
 }
 """
 
@@ -1959,6 +2286,8 @@ PLANTAS_FILE = DATA_DIR / "plantas_5s.json"
 DB_FILE = DATA_DIR / "nefab5s.db"
 PHOTOS_DIR = DATA_DIR / "photos"
 PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+SEG_PHOTOS_DIR = DATA_DIR / "seguridad_photos"
+SEG_PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_PHOTO_EXT = {"jpg", "jpeg", "png", "gif", "webp", "heic", "heif"}
 
 # ── Persistencia SQLite ──────────────────────────────────────────────────
@@ -2014,6 +2343,21 @@ def init_db():
         CREATE TABLE IF NOT EXISTS paises_plantas (
             id INTEGER PRIMARY KEY AUTOINCREMENT, pais TEXT, planta TEXT, areas_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS seg_sitios (
+            id TEXT PRIMARY KEY, name TEXT, site TEXT, customer TEXT, owner TEXT,
+            problem TEXT, created_at TEXT, updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS seg_hallazgos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, sitio_id TEXT,
+            date TEXT, area TEXT, description TEXT, severity TEXT, status TEXT,
+            responsible TEXT, due_date TEXT, created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS seg_fotos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, hallazgo_id INTEGER,
+            filename TEXT, caption TEXT, date TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_seg_hallazgos_sid ON seg_hallazgos(sitio_id);
+        CREATE INDEX IF NOT EXISTS idx_seg_fotos_hid ON seg_fotos(hallazgo_id);
         CREATE INDEX IF NOT EXISTS idx_auditorias_pid ON auditorias(planta_id);
         CREATE INDEX IF NOT EXISTS idx_hallazgos_pid ON hallazgos(planta_id);
         CREATE INDEX IF NOT EXISTS idx_evidence_pid ON evidence(planta_id);
@@ -2355,6 +2699,174 @@ def save_paises_plantas(data):
     conn.commit()
     conn.close()
 
+
+# ── Inspección de Seguridad (proyecto separado de 5S: sitios, hallazgos
+# con severidad/responsable/estado igual que 5S, pero con MULTIPLES fotos
+# por hallazgo en vez de una sola) ─────────────────────────────────────────
+def touch_seg_sitio(sid):
+    conn = get_db()
+    conn.execute("UPDATE seg_sitios SET updated_at=? WHERE id=?",
+                 (datetime.now().strftime("%d/%m/%Y %H:%M"), sid))
+    conn.commit()
+    conn.close()
+
+
+def load_seg_sitios():
+    conn = get_db()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM seg_sitios ORDER BY rowid ASC")]
+    conn.close()
+    return rows
+
+
+def get_seg_sitio(sid):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM seg_sitios WHERE id=?", (sid,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    s = dict(row)
+    s["hallazgos"] = [dict(r) for r in conn.execute(
+        "SELECT * FROM seg_hallazgos WHERE sitio_id=? ORDER BY id DESC", (sid,))]
+    for h in s["hallazgos"]:
+        h["fotos"] = [dict(r) for r in conn.execute(
+            "SELECT * FROM seg_fotos WHERE hallazgo_id=? ORDER BY id", (h["id"],))]
+    conn.close()
+    return s
+
+
+def create_seg_sitio_db(name, site, customer, owner, problem):
+    sid = gen_id()
+    now = date.today().isoformat()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO seg_sitios (id,name,site,customer,owner,problem,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (sid, name or "Nuevo sitio", site, customer, owner, problem, now, now),
+    )
+    conn.commit()
+    conn.close()
+    return sid
+
+
+def update_seg_sitio_db(sid, name, site, customer, owner, problem):
+    conn = get_db()
+    conn.execute(
+        "UPDATE seg_sitios SET name=?,site=?,customer=?,owner=?,problem=?,updated_at=? WHERE id=?",
+        (name, site, customer, owner, problem, datetime.now().strftime("%d/%m/%Y %H:%M"), sid),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_seg_sitio_db(sid):
+    conn = get_db()
+    hids = [r["id"] for r in conn.execute("SELECT id FROM seg_hallazgos WHERE sitio_id=?", (sid,))]
+    for hid in hids:
+        conn.execute("DELETE FROM seg_fotos WHERE hallazgo_id=?", (hid,))
+    conn.execute("DELETE FROM seg_hallazgos WHERE sitio_id=?", (sid,))
+    conn.execute("DELETE FROM seg_sitios WHERE id=?", (sid,))
+    conn.commit()
+    conn.close()
+    try:
+        import shutil
+        shutil.rmtree(SEG_PHOTOS_DIR / sid, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def add_seg_hallazgo_db(sid, item):
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO seg_hallazgos (sitio_id,date,area,description,severity,status,responsible,"
+        "due_date,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (sid, item.get("date", ""), item.get("area", ""), item.get("description", ""),
+         item.get("severity", ""), item.get("status", ""), item.get("responsible", ""),
+         item.get("due_date", ""), datetime.now().strftime("%d/%m/%Y %H:%M")),
+    )
+    new_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    touch_seg_sitio(sid)
+    return new_id
+
+
+def update_seg_hallazgo_db(hid, item):
+    conn = get_db()
+    conn.execute(
+        "UPDATE seg_hallazgos SET date=?,area=?,description=?,severity=?,status=?,responsible=?,due_date=? "
+        "WHERE id=?",
+        (item.get("date", ""), item.get("area", ""), item.get("description", ""), item.get("severity", ""),
+         item.get("status", ""), item.get("responsible", ""), item.get("due_date", ""), hid),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_seg_hallazgo_db(hid):
+    conn = get_db()
+    conn.execute("DELETE FROM seg_fotos WHERE hallazgo_id=?", (hid,))
+    conn.execute("DELETE FROM seg_hallazgos WHERE id=?", (hid,))
+    conn.commit()
+    conn.close()
+
+
+def close_seg_hallazgo_db(hid):
+    conn = get_db()
+    conn.execute("UPDATE seg_hallazgos SET status='Cerrado' WHERE id=?", (hid,))
+    conn.commit()
+    conn.close()
+
+
+def get_seg_hallazgo(hid):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM seg_hallazgos WHERE id=?", (hid,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    h = dict(row)
+    h["fotos"] = [dict(r) for r in conn.execute(
+        "SELECT * FROM seg_fotos WHERE hallazgo_id=? ORDER BY id", (hid,))]
+    conn.close()
+    return h
+
+
+def add_seg_foto_db(hid, filename, caption):
+    conn = get_db()
+    conn.execute("INSERT INTO seg_fotos (hallazgo_id,filename,caption,date) VALUES (?,?,?,?)",
+                 (hid, filename, caption, date.today().isoformat()))
+    conn.commit()
+    conn.close()
+
+
+def delete_seg_foto_db(foto_id):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM seg_fotos WHERE id=?", (foto_id,)).fetchone()
+    conn.execute("DELETE FROM seg_fotos WHERE id=?", (foto_id,))
+    conn.commit()
+    conn.close()
+    return dict(row) if row else None
+
+
+def save_seg_photos(sid, hid, files):
+    """Guarda una o varias fotos subidas para un hallazgo de seguridad."""
+    saved = []
+    sitio_photo_dir = SEG_PHOTOS_DIR / sid
+    sitio_photo_dir.mkdir(parents=True, exist_ok=True)
+    for file in files:
+        if not file or not file.filename:
+            continue
+        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+        if ext not in ALLOWED_PHOTO_EXT:
+            continue
+        unique_name = secure_filename(
+            f"seg_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=5))}.{ext}"
+        )
+        file.save(str(sitio_photo_dir / unique_name))
+        add_seg_foto_db(hid, unique_name, "")
+        saved.append(unique_name)
+    return saved
+
+
 app = Flask(__name__)
 app.jinja_loader = DictLoader(TEMPLATES)
 app.secret_key = os.environ.get("SECRET_KEY", "nefab-5s-web-dev-only")
@@ -2415,7 +2927,8 @@ def get_current_user():
 
 @app.context_processor
 def inject_current_user():
-    return {"current_user": get_current_user()}
+    return {"current_user": get_current_user(),
+            "project": "seguridad" if request.path.startswith("/seguridad") else "5s"}
 
 
 def gen_id():
@@ -2498,13 +3011,6 @@ def logout():
 @admin_required
 def admin_users():
     return render_template("admin_users.html", users=load_users(), current=get_current_user())
-
-
-@app.route("/admin/descargar-bd")
-@admin_required
-def descargar_bd():
-    return send_file(str(DB_FILE), as_attachment=True,
-                      download_name=f"nefab5s_{datetime.now().strftime('%Y%m%d_%H%M')}.db")
 
 
 @app.route("/admin/users/new", methods=["GET", "POST"])
@@ -3504,6 +4010,195 @@ def planta_report_pdf(pid):
         io.BytesIO(pdf_bytes), as_attachment=True,
         download_name=f"{safe_name}_reporte.pdf", mimetype="application/pdf",
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Inspección de Seguridad — proyecto separado de 5S. Sitios propios,
+# hallazgos con severidad/responsable/estado (igual que 5S) pero con
+# MULTIPLES fotos por hallazgo.
+# ═══════════════════════════════════════════════════════════════════════
+def seg_sitio_stats(s):
+    hallazgos = s.get("hallazgos", [])
+    estado_counts = {"Abierto": 0, "En progreso": 0, "Cerrado": 0}
+    severidad_counts = {"Alto": 0, "Medio": 0, "Bajo": 0}
+    for h in hallazgos:
+        est = h.get("status", "Abierto")
+        estado_counts[est] = estado_counts.get(est, 0) + 1
+        sev = h.get("severity", "Medio")
+        severidad_counts[sev] = severidad_counts.get(sev, 0) + 1
+    return {
+        "total": len(hallazgos),
+        "abiertos": estado_counts.get("Abierto", 0),
+        "en_progreso": estado_counts.get("En progreso", 0),
+        "cerrados": estado_counts.get("Cerrado", 0),
+        "severidad_alta": severidad_counts.get("Alto", 0),
+        "estado_counts": estado_counts,
+        "severidad_counts": severidad_counts,
+    }
+
+
+def get_seg_sitio_or_404(sid):
+    s = get_seg_sitio(sid)
+    if not s:
+        abort(404)
+    return s
+
+
+@app.route("/seguridad")
+@login_required
+def seg_home():
+    return redirect(url_for("seg_sitios_list"))
+
+
+@app.route("/seguridad/sitios")
+@login_required
+def seg_sitios_list():
+    sitios = load_seg_sitios()
+    total_abiertos = total_cerrados = 0
+    for s in reversed(sitios):
+        conn = get_db()
+        rows = [dict(r) for r in conn.execute(
+            "SELECT status FROM seg_hallazgos WHERE sitio_id=?", (s["id"],))]
+        conn.close()
+        s["_n_total"] = len(rows)
+        s["_n_abiertos"] = sum(1 for r in rows if r["status"] != "Cerrado")
+        total_abiertos += s["_n_abiertos"]
+        total_cerrados += sum(1 for r in rows if r["status"] == "Cerrado")
+    sitios = list(reversed(sitios))
+    return render_template("seg_sitios_list.html", sitios=sitios,
+                           total_abiertos=total_abiertos, total_cerrados=total_cerrados)
+
+
+@app.route("/seguridad/sitios/new", methods=["GET", "POST"])
+@login_required
+def seg_sitio_new():
+    if request.method == "POST":
+        sid = create_seg_sitio_db(
+            request.form.get("name", "").strip(),
+            request.form.get("site", "").strip(),
+            request.form.get("customer", "").strip(),
+            request.form.get("owner", "").strip(),
+            request.form.get("problem", "").strip(),
+        )
+        return redirect(url_for("seg_sitio_overview", sid=sid))
+    return render_template("seg_sitio_form.html", old={})
+
+
+@app.route("/seguridad/sitios/<sid>/edit", methods=["GET", "POST"])
+@login_required
+def seg_sitio_edit(sid):
+    s = get_seg_sitio_or_404(sid)
+    if request.method == "POST":
+        update_seg_sitio_db(
+            sid,
+            request.form.get("name", "").strip() or s["name"],
+            request.form.get("site", "").strip(),
+            request.form.get("customer", "").strip(),
+            request.form.get("owner", "").strip(),
+            request.form.get("problem", "").strip(),
+        )
+        return redirect(url_for("seg_sitio_overview", sid=sid))
+    return render_template("seg_sitio_form.html", old=s)
+
+
+@app.route("/seguridad/sitios/<sid>/delete", methods=["POST"])
+@login_required
+def seg_sitio_delete(sid):
+    delete_seg_sitio_db(sid)
+    return redirect(url_for("seg_sitios_list"))
+
+
+@app.route("/seguridad/sitios/<sid>")
+@login_required
+def seg_sitio_overview(sid):
+    s = get_seg_sitio_or_404(sid)
+    stats = seg_sitio_stats(s)
+    return render_template("seg_sitio_overview.html", s=s, stats=stats, active="Inicio")
+
+
+@app.route("/seguridad/sitios/<sid>/hallazgos")
+@login_required
+def seg_hallazgos_list(sid):
+    s = get_seg_sitio_or_404(sid)
+    return render_template("seg_hallazgos_list.html", s=s, active="Hallazgos")
+
+
+@app.route("/seguridad/sitios/<sid>/hallazgos/save", methods=["GET", "POST"])
+@login_required
+def seg_hallazgo_form(sid):
+    s = get_seg_sitio_or_404(sid)
+    hid = request.args.get("hid", type=int)
+    old = get_seg_hallazgo(hid) if hid else {}
+    if old is None:
+        abort(404)
+    if request.method == "POST":
+        item = {
+            "date": request.form.get("date", "").strip() or date.today().isoformat(),
+            "area": request.form.get("area", "").strip(),
+            "description": request.form.get("description", "").strip(),
+            "severity": request.form.get("severity", SEVERITIES[0]),
+            "status": request.form.get("status", FINDING_STATUSES[0]),
+            "responsible": request.form.get("responsible", "").strip(),
+            "due_date": request.form.get("due_date", "").strip(),
+        }
+        if not item["area"] or not item["description"]:
+            return render_template("seg_hallazgo_form.html", s=s, old={**old, **item}, error=True,
+                                   today=date.today().isoformat())
+        if hid:
+            update_seg_hallazgo_db(hid, item)
+            new_hid = hid
+        else:
+            new_hid = add_seg_hallazgo_db(sid, item)
+
+        files = request.files.getlist("photos")
+        save_seg_photos(sid, new_hid, files)
+
+        return redirect(url_for("seg_hallazgos_list", sid=sid))
+    return render_template("seg_hallazgo_form.html", s=s, old=old, error=False,
+                           today=date.today().isoformat())
+
+
+@app.route("/seguridad/sitios/<sid>/hallazgos/<int:hid>/delete", methods=["POST"])
+@login_required
+def seg_hallazgo_delete(sid, hid):
+    h = get_seg_hallazgo(hid)
+    if h:
+        for foto in h.get("fotos", []):
+            try:
+                (SEG_PHOTOS_DIR / sid / foto["filename"]).unlink(missing_ok=True)
+            except Exception:
+                pass
+    delete_seg_hallazgo_db(hid)
+    return redirect(url_for("seg_hallazgos_list", sid=sid))
+
+
+@app.route("/seguridad/sitios/<sid>/hallazgos/<int:hid>/close", methods=["POST"])
+@login_required
+def seg_hallazgo_close(sid, hid):
+    close_seg_hallazgo_db(hid)
+    return redirect(url_for("seg_hallazgos_list", sid=sid))
+
+
+@app.route("/seguridad/sitios/<sid>/fotos/<filename>")
+@login_required
+def seg_foto(sid, filename):
+    sitio_photo_dir = SEG_PHOTOS_DIR / sid
+    safe_name = secure_filename(filename)
+    if not (sitio_photo_dir / safe_name).exists():
+        abort(404)
+    return send_from_directory(str(sitio_photo_dir), safe_name)
+
+
+@app.route("/seguridad/sitios/<sid>/hallazgos/<int:hid>/fotos/<int:foto_id>/delete", methods=["POST"])
+@login_required
+def seg_foto_delete(sid, hid, foto_id):
+    foto = delete_seg_foto_db(foto_id)
+    if foto:
+        try:
+            (SEG_PHOTOS_DIR / sid / foto["filename"]).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return redirect(url_for("seg_hallazgo_form", sid=sid, hid=hid))
 
 
 if __name__ == "__main__":

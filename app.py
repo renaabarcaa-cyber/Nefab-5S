@@ -412,6 +412,7 @@ TEMPLATES = {
   <a href="{{ url_for('plantas_list') }}" class="sidebar-btn">← {{ tr("Volver a plantas") }}</a>
   <div class="sidebar-label">Administración</div>
   <a href="{{ url_for('admin_users') }}" class="sidebar-btn active">👤 Usuarios</a>
+  <a href="{{ url_for('descargar_bd') }}" class="sidebar-btn">⬇ Descargar Base de Datos</a>
 {% endblock %}
 
 {% block content %}
@@ -767,6 +768,9 @@ Usuarios</a>
   <a href="{{ url_for('admin_users') }}" class="sidebar-btn">
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
   Usuarios</a>
+  <a href="{{ url_for('descargar_bd') }}" class="sidebar-btn">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+  Descargar Base de Datos</a>
   {% endif %}
 {% endblock %}
 
@@ -2494,6 +2498,13 @@ def logout():
 @admin_required
 def admin_users():
     return render_template("admin_users.html", users=load_users(), current=get_current_user())
+
+
+@app.route("/admin/descargar-bd")
+@admin_required
+def descargar_bd():
+    return send_file(str(DB_FILE), as_attachment=True,
+                      download_name=f"nefab5s_{datetime.now().strftime('%Y%m%d_%H%M')}.db")
 
 
 @app.route("/admin/users/new", methods=["GET", "POST"])

@@ -1,57 +1,2069 @@
+# -*- coding: utf-8 -*-
 """
-Nefab Operations Hub
-=====================
-Sistema web unificado para control de operaciones:
-  - VAS (Value Added Services)          [activo]
-  - Inventario de Materiales            [proximamente]
-  - Registro de Calidad                 [proximamente]
+Nefab 5S Web - v1.0
+Flask + JSON local (o disco persistente via DATA_DIR) + Login con roles
+Admin / Usuario. Mismo patron arquitectonico que VSM Manager Web:
+un solo archivo, sin dependencias entre archivos propios, guardado
+atomico con Lock, evidencia fotografica, listo para Render.
 
-Un solo archivo app.py por preferencia de despliegue simple (Render).
-Stack: Flask + Flask-Login + SQLite + openpyxl (export) + Chart.js (CDN)
+Modelo: Plantas -> Auditorias 5S (puntaje 1-5 por pilar) + Hallazgos
+(con evidencia fotografica y seguimiento de accion correctiva).
+
+Instalacion:
+    pip install -r requirements.txt
+
+Ejecutar:
+    python app.py
+
+Luego abrir en el navegador:
+    http://127.0.0.1:5000
 """
-
-import os
-import sqlite3
+from __future__ import annotations
+import csv
 import io
+import json
+import os
+import time
+import random
+import string
+import threading
+import zipfile
 import base64
-from datetime import datetime, date
+import tempfile
+from collections import defaultdict
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from functools import wraps
 
 from flask import (
-    Flask, request, redirect, url_for, render_template_string,
-    session, flash, send_file, jsonify, g, Response
+    Flask, render_template, request, redirect, url_for,
+    session, send_file, abort, Response, send_from_directory,
 )
+from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment
+from jinja2 import DictLoader
 
-# --------------------------------------------------------------------------
-# Config
-# --------------------------------------------------------------------------
-APP_NAME = "Nefab Operaciones"
-SECRET_KEY = os.environ.get("SECRET_KEY", "nefab-ops-dev-secret-change-me")
+# Colores Nefab
+NB, NO, NG, NGR = "#144E8C", "#FE8200", "#8CC24A", "#88888D"
+NBL, NGL, NOL = "#E6F1FB", "#EAF3DE", "#FFF3E0"
+RED, REDL = "#E34948", "#FCEBEB"
+WHITE, BG, CARD, BORDER, DARK, MUTED = "#FFFFFF", "#F4F6FB", "#FFFFFF", "#E2E8F0", "#1E293B", "#64748B"
 
-# En Render, montar un disco persistente en /var/data y setear DATA_DIR=/var/data
-DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
-os.makedirs(DATA_DIR, exist_ok=True)
-DB_PATH = os.path.join(DATA_DIR, "nefab_ops.db")
+AREAS = ["Logística", "Manufactura"]
+AREA_COLOR = {"Logística": NB, "Manufactura": NO}
 
-NEFAB_BLUE = "#144E8C"
-NEFAB_ORANGE = "#FE8200"
-NEFAB_GREEN = "#6CC24A"
-NEFAB_GRAY = "#88888D"
+PILLARS = ["Seiri", "Seiton", "Seiso", "Seiketsu", "Shitsuke"]
+PILLAR_LABELS = {
+    "Seiri": "Seiri (Clasificar)", "Seiton": "Seiton (Ordenar)", "Seiso": "Seiso (Limpiar)",
+    "Seiketsu": "Seiketsu (Estandarizar)", "Shitsuke": "Shitsuke (Disciplina)",
+}
+FASES = ["🔴 Seiri", "🟠 Seiton", "🟡 Seiso", "🟢 Seiketsu", "🔵 Shitsuke"]
+FASE_KEYS = {"🔴 Seiri": "Seiri", "🟠 Seiton": "Seiton", "🟡 Seiso": "Seiso",
+             "🟢 Seiketsu": "Seiketsu", "🔵 Shitsuke": "Shitsuke"}
+FASE_COLOR = {"🔴 Seiri": "#E53935", "🟠 Seiton": "#FE8200", "🟡 Seiso": "#FDD835",
+              "🟢 Seiketsu": "#8CC24A", "🔵 Shitsuke": "#144E8C"}
 
-AREAS_VAS = ["CARPINTERIA", "OUTBOUND", "PACKING", "WOODSHOP", "QUALITY", "OTRO"]
-WC_BC_OPTIONS = ["WC", "BC"]
-TAREAS_VAS = ["Stock Transfer", "ODR", "Pictures", "Quality", "Net weight",
-              "Packaging", "Box", "Other"]
+# Checklist fijo de la auditoria: 10 preguntas, 2 por cada fase (mismo orden
+# y agrupacion que la app de escritorio: indices 0-1=Seiri, 2-3=Seiton, etc.)
+PREGUNTAS = [
+    ("🔴 Seiri", "¿Solo tiene lo que usa?"),
+    ("🔴 Seiri", "¿Es de fácil acceso?"),
+    ("🟠 Seiton", "¿Los elementos están identificados?"),
+    ("🟠 Seiton", "¿Todo está en el lugar correcto?"),
+    ("🟡 Seiso", "¿El lugar está limpio?"),
+    ("🟡 Seiso", "¿Los depósitos de basura contienen el tipo correcto?"),
+    ("🟢 Seiketsu", "¿Organización general según la norma?"),
+    ("🟢 Seiketsu", "¿Se usan y actualizan los tableros de anuncios?"),
+    ("🔵 Shitsuke", "¿Se mantiene capacitación frecuente de 5S?"),
+    ("🔵 Shitsuke", "¿Las 5S se implementan y se siguen?"),
+]
+FASES_MAP_IDX = {"Seiri": [0, 1], "Seiton": [2, 3], "Seiso": [4, 5], "Seiketsu": [6, 7], "Shitsuke": [8, 9]}
 
-CATEGORIAS_MATERIAL = ["Madera", "Cartón", "Insumos", "Ferretería", "Otro"]
-UNIDADES_MEDIDA = ["un", "kg", "m", "m2", "m3", "l", "plancha", "pallet"]
-TIPOS_MOVIMIENTO = ["Entrada", "Salida"]
+DEFAULT_CATALOGO = [
+    {"fase": "🔴 Seiri", "descripcion": "Herramientas o materiales innecesarios en el área"},
+    {"fase": "🔴 Seiri", "descripcion": "Documentación antigua o desactualizada no eliminada"},
+    {"fase": "🔴 Seiri", "descripcion": "Equipos obsoletos almacenados sin motivo"},
+    {"fase": "🔴 Seiri", "descripcion": "Mezcla de materiales útiles con desechos"},
+    {"fase": "🔴 Seiri", "descripcion": "Falta identificación de lo que se debe descartar"},
+    {"fase": "🟠 Seiton", "descripcion": "Herramientas sin lugar definido o mal ubicadas"},
+    {"fase": "🟠 Seiton", "descripcion": "Falta señalización en estanterías y cajones"},
+    {"fase": "🟠 Seiton", "descripcion": "Mala organización de cables y utensilios"},
+    {"fase": "🟠 Seiton", "descripcion": "Dificultad para acceder a elementos frecuentes"},
+    {"fase": "🟠 Seiton", "descripcion": "Áreas de almacenamiento sobrecargadas"},
+    {"fase": "🟡 Seiso", "descripcion": "Suciedad visible en maquinaria, pisos o superficies"},
+    {"fase": "🟡 Seiso", "descripcion": "Fugas de aceite, grasa o residuos sin atender"},
+    {"fase": "🟡 Seiso", "descripcion": "Equipos con polvo acumulado o manchas"},
+    {"fase": "🟡 Seiso", "descripcion": "Áreas de difícil acceso sin limpieza regular"},
+    {"fase": "🟡 Seiso", "descripcion": "Falta cronograma o responsables de limpieza"},
+    {"fase": "🟢 Seiketsu", "descripcion": "Ausencia de procedimientos visuales o instructivos"},
+    {"fase": "🟢 Seiketsu", "descripcion": "Falta consistencia entre turnos"},
+    {"fase": "🟢 Seiketsu", "descripcion": "Etiquetado inconsistente o incompleto"},
+    {"fase": "🟢 Seiketsu", "descripcion": "Señalética confusa o deteriorada"},
+    {"fase": "🟢 Seiketsu", "descripcion": "No uso de formatos estandarizados"},
+    {"fase": "🔵 Shitsuke", "descripcion": "No cumplimiento de normas básicas de orden"},
+    {"fase": "🔵 Shitsuke", "descripcion": "Falta de compromiso del personal con las 5S"},
+    {"fase": "🔵 Shitsuke", "descripcion": "No realización de auditorías internas periódicas"},
+    {"fase": "🔵 Shitsuke", "descripcion": "Supervisores que no refuerzan la cultura 5S"},
+    {"fase": "🔵 Shitsuke", "descripcion": "Inexistencia de capacitaciones o seguimientos"},
+]
 
-TIPOS_CALIDAD = ["Retorno", "Reclamo Metso", "Ticket", "Diferencia de Stock", "Reversa", "Scrap"]
-ESTADOS_CALIDAD = ["Pendiente", "Esperando RDEL", "En proceso", "Aprobado", "Rechazado", "Cerrado"]
+SCORE_OPTIONS = [1, 2, 3, 4, 5]
+SEVERITIES = ["Alto", "Medio", "Bajo"]
+FINDING_STATUSES = ["Abierto", "En progreso", "Cerrado"]
+
+LANGUAGES = {"Español": "es", "English": "en", "Português": "pt"}
+TRANSLATIONS = {
+    "en": {
+        "Plantas 5S": "5S Sites", "Plantas 5S Nefab": "Nefab 5S Sites", "Nueva planta": "New Site",
+        "Nombre de la planta": "Site name", "Sitio / Operación": "Site / Operation",
+        "Cliente": "Customer", "Responsable": "Owner", "Área": "Area", "Problema / Alcance": "Scope",
+        "Cancelar": "Cancel", "Crear": "Create", "Guardar": "Save", "Abrir": "Open", "Eliminar": "Delete",
+        "Total plantas": "Total sites", "Logística": "Logistics", "Manufactura": "Manufacturing",
+        "Todos": "All", "Filtrar por área": "Filter by area", "Sin plantas en esta área.": "No sites in this area.",
+        "Volver a plantas": "Back to sites", "Secciones de la planta": "Site sections",
+        "Inicio": "Dashboard", "Auditorías": "Audits", "Hallazgos": "Findings", "Evidencias": "Evidence",
+        "Exportar": "Export", "Salir": "Logout", "Planta activa": "Active site", "Actualizado": "Updated",
+        "Guardado": "Saved", "Promedio general": "Overall average", "Auditorías realizadas": "Audits performed",
+        "Hallazgos abiertos": "Open findings", "Hallazgos cerrados": "Closed findings",
+        "Promedio por pilar": "Average by pillar", "Fecha": "Date",
+        "Auditor": "Auditor", "Puntaje promedio": "Average score", "Observaciones": "Notes",
+        "Registro de auditorías": "Audit log", "+ Nueva auditoría": "+ New audit",
+        "Registro de hallazgos": "Findings log", "+ Nuevo hallazgo": "+ New finding",
+        "Zona / Área": "Zone / Area", "Pilar": "Pillar", "Descripción": "Description",
+        "Severidad": "Severity", "Acción correctiva": "Corrective action", "Fecha compromiso": "Due date",
+        "Estado": "Status", "Alto": "High", "Medio": "Medium", "Bajo": "Low",
+        "Abierto": "Open", "En progreso": "In progress", "Cerrado": "Closed",
+        "Editar": "Edit", "Acciones": "Actions", "Buscar zona, descripción o acción": "Search zone, description or action",
+        "Limpiar filtros": "Clear filters", "Editar seleccionado": "Edit selected",
+        "Eliminar seleccionado": "Delete selected", "Agregar foto": "Add photo", "Subir evidencia": "Upload evidence",
+        "Sin fotos registradas.": "No photos recorded.", "Comentario": "Comment", "Subir": "Upload",
+        "Eliminar foto": "Delete photo", "Tomar o seleccionar foto": "Take or select photo",
+        "Tomar foto": "Take photo", "Abrir la cámara del dispositivo": "Open the device camera",
+        "Cargar desde galería": "Upload from gallery", "Seleccionar una imagen guardada": "Select a saved image",
+        "Fotos del hallazgo": "Finding photos", "Puedes seleccionar varias imágenes": "You can select multiple images",
+        "¿Eliminar esta foto?": "Delete this photo?", "Registro fotográfico de evidencia": "Photo evidence log",
+        "Exportar planta 5S": "Export 5S site", "Descargar ZIP (2 CSV)": "Download ZIP (2 CSV)",
+        "Descargar reporte PDF": "Download PDF report", "Información de la planta": "Site information",
+        "Idioma": "Language", "General": "General", "¿Eliminar esta planta 5S?": "Delete this 5S site?",
+        "Campo requerido": "Required field",
+        "opcional": "optional", "Evidencia fotográfica": "Photo evidence",
+        "Puntaje por pilar": "Score by pillar", "Cerrar": "Close",
+        "Del catálogo": "From catalog",
+        "Resultados de auditorías": "Audit results", "Hallazgos por fase": "Findings by pillar",
+        "Estado de hallazgos": "Findings status", "Evidencia fotográfica reciente": "Recent photo evidence",
+        "Fase 5S": "5S Pillar", "filtrado por fase": "filtered by pillar", "Selecciona": "Select",
+        "País": "Country", "Editar planta": "Edit site", "separadas por coma": "comma-separated",
+        "Áreas / zonas de la planta": "Site areas / zones", "Catálogo de posibilidades": "Catalog of possibilities",
+        "Gestionar catálogo": "Manage catalog", "Agregar al catálogo": "Add to catalog",
+        "Volver": "Back", "Planta": "Site",
+        "Cronograma de Seguimiento": "Follow-up Schedule", "Filtros": "Filters",
+        "Fecha desde": "Date from", "Fecha hasta": "Date to", "Rango rápido": "Quick range",
+        "Todo": "All", "Aplicar": "Apply", "Gantt semanal": "Weekly Gantt",
+        "Área": "Area", "Hallazgo": "Finding", "Semana actual": "Current week",
+        "Todas": "All", "Cronograma": "Schedule", "Fase": "Pillar", "Editar entrada": "Edit entry",
+        "Catálogo de Países y Plantas": "Countries and Sites Catalog",
+        "Registro maestro reutilizable al crear una planta o registrar una auditoría/hallazgo.":
+            "Reusable master registry when creating a site or logging an audit/finding.",
+        "Sin entradas.": "No entries.", "Agregar entrada": "Add entry", "Agregar": "Add", "Otro": "Other",
+        "¿Solo tiene lo que usa?": "Do you only have what you use?",
+        "¿Es de fácil acceso?": "Is it easily accessible?",
+        "¿Los elementos están identificados?": "Are items identified?",
+        "¿Todo está en el lugar correcto?": "Is everything in the right place?",
+        "¿El lugar está limpio?": "Is the place clean?",
+        "¿Los depósitos de basura contienen el tipo correcto?": "Do trash bins contain the correct type of waste?",
+        "¿Organización general según la norma?": "Overall organization according to standard?",
+        "¿Se usan y actualizan los tableros de anuncios?": "Are bulletin boards used and updated?",
+        "¿Se mantiene capacitación frecuente de 5S?": "Is frequent 5S training maintained?",
+        "¿Las 5S se implementan y se siguen?": "Are the 5S implemented and followed?",
+        "Herramientas o materiales innecesarios en el área": "Unnecessary tools or materials in the area",
+        "Documentación antigua o desactualizada no eliminada": "Old or outdated documentation not removed",
+        "Equipos obsoletos almacenados sin motivo": "Obsolete equipment stored without reason",
+        "Mezcla de materiales útiles con desechos": "Useful materials mixed with waste",
+        "Falta identificación de lo que se debe descartar": "Missing identification of what should be discarded",
+        "Herramientas sin lugar definido o mal ubicadas": "Tools without a defined place or misplaced",
+        "Falta señalización en estanterías y cajones": "Missing signage on shelves and drawers",
+        "Mala organización de cables y utensilios": "Poor organization of cables and utensils",
+        "Dificultad para acceder a elementos frecuentes": "Difficulty accessing frequently used items",
+        "Áreas de almacenamiento sobrecargadas": "Overloaded storage areas",
+        "Suciedad visible en maquinaria, pisos o superficies": "Visible dirt on machinery, floors or surfaces",
+        "Fugas de aceite, grasa o residuos sin atender": "Unattended oil, grease or waste leaks",
+        "Equipos con polvo acumulado o manchas": "Equipment with accumulated dust or stains",
+        "Áreas de difícil acceso sin limpieza regular": "Hard-to-reach areas without regular cleaning",
+        "Falta cronograma o responsables de limpieza": "Missing cleaning schedule or responsible person",
+        "Ausencia de procedimientos visuales o instructivos": "Absence of visual or instructional procedures",
+        "Falta consistencia entre turnos": "Lack of consistency between shifts",
+        "Etiquetado inconsistente o incompleto": "Inconsistent or incomplete labeling",
+        "Señalética confusa o deteriorada": "Confusing or deteriorated signage",
+        "No uso de formatos estandarizados": "Standardized formats not used",
+        "No cumplimiento de normas básicas de orden": "Non-compliance with basic order standards",
+        "Falta de compromiso del personal con las 5S": "Lack of staff commitment to 5S",
+        "No realización de auditorías internas periódicas": "Periodic internal audits not performed",
+        "Supervisores que no refuerzan la cultura 5S": "Supervisors not reinforcing the 5S culture",
+        "Inexistencia de capacitaciones o seguimientos": "No training or follow-up",
+        "Inspección de Seguridad": "Safety Inspection",
+        "Inspección de Seguridad — Sitios": "Safety Inspection — Sites",
+        "Recorridos de seguridad y hallazgos de zonas desordenadas, independiente del registro 5S.":
+            "Safety walkthroughs and findings for disorganized zones, independent from the 5S log.",
+        "Nuevo sitio": "New site",
+        "Total sitios": "Total sites",
+        "Sin sitios registrados todavía.": "No sites registered yet.",
+        "abiertos": "open", "hallazgos totales": "total findings",
+        "Volver a sitios": "Back to sites",
+        "Nombre del sitio": "Site name",
+        "Editar sitio": "Edit site",
+        "¿Eliminar este sitio de seguridad?": "Delete this safety site?",
+        "Secciones del sitio": "Site sections",
+        "Sitio activo": "Active site",
+        "Registro de hallazgos de seguridad": "Safety findings log",
+        "+ Nuevo hallazgo": "+ New finding",
+        "Fotos": "Photos",
+        "Agregar fotos": "Add photos",
+        "Seleccionar fotos (puedes elegir varias)": "Select photos (you can choose several)",
+        "Sin fotos en este hallazgo.": "No photos for this finding.",
+        "Hallazgo de seguridad": "Safety finding",
+        "Cronograma de Seguimiento — Seguridad": "Follow-up Schedule — Safety",
+        "Sitio": "Site",
+        "Severidad: Todas": "Severity: All",
+        "Sitio: Todos": "Site: All",
+        "Sin hallazgos en el rango seleccionado.": "No findings in the selected range.",
+        "Seguridad": "Safety",
+        "Alcance / Notas": "Scope / Notes",
+        "Hallazgos totales": "Total findings",
+        "Abiertos": "Open",
+        "Cerrados": "Closed",
+        "Severidad Alta": "High Severity",
+        "Últimos hallazgos con fotos": "Recent findings with photos",
+        "Hallazgos de Seguridad": "Safety Findings",
+        "Zona": "Zone",
+        "Sin hallazgos registrados.": "No findings registered.",
+        "¿Eliminar este hallazgo?": "Delete this finding?",
+        "Editar hallazgo": "Edit finding",
+        "Nuevo hallazgo de Seguridad": "New Safety Finding",
+        "Completa al menos zona y descripción.": "Fill in at least zone and description.",
+        "Descripción del hallazgo": "Finding description",
+        "Fotos (puedes seleccionar varias a la vez)": "Photos (you can select several at once)",
+        "Fotos de este hallazgo": "Photos for this finding",
+    },
+    "pt": {
+        "Plantas 5S": "Plantas 5S",
+        "Plantas 5S Nefab": "Plantas 5S Nefab",
+        "Nueva planta": "Nova planta",
+        "Nombre de la planta": "Nome da planta",
+        "Sitio / Operación": "Local / Operação",
+        "Cliente": "Cliente",
+        "Responsable": "Responsável",
+        "Área": "Área",
+        "Problema / Alcance": "Problema / Escopo",
+        "Cancelar": "Cancelar",
+        "Crear": "Criar",
+        "Guardar": "Salvar",
+        "Abrir": "Abrir",
+        "Eliminar": "Excluir",
+        "Total plantas": "Total de plantas",
+        "Logística": "Logística",
+        "Manufactura": "Manufatura",
+        "Todos": "Todos",
+        "Filtrar por área": "Filtrar por área",
+        "Sin plantas en esta área.": "Nenhuma planta nesta área.",
+        "Volver a plantas": "Voltar às plantas",
+        "Secciones de la planta": "Seções da planta",
+        "Inicio": "Painel",
+        "Auditorías": "Auditorias",
+        "Hallazgos": "Achados",
+        "Evidencias": "Evidências",
+        "Exportar": "Exportar",
+        "Salir": "Sair",
+        "Planta activa": "Planta ativa",
+        "Actualizado": "Atualizado",
+        "Guardado": "Salvo",
+        "Promedio general": "Média geral",
+        "Auditorías realizadas": "Auditorias realizadas",
+        "Hallazgos abiertos": "Achados abertos",
+        "Hallazgos cerrados": "Achados fechados",
+        "Promedio por pilar": "Média por pilar",
+        "Fecha": "Data",
+        "Auditor": "Auditor",
+        "Puntaje promedio": "Pontuação média",
+        "Observaciones": "Observações",
+        "Registro de auditorías": "Registro de auditorias",
+        "+ Nueva auditoría": "+ Nova auditoria",
+        "Registro de hallazgos": "Registro de achados",
+        "+ Nuevo hallazgo": "+ Novo achado",
+        "Zona / Área": "Zona / Área",
+        "Pilar": "Pilar",
+        "Descripción": "Descrição",
+        "Severidad": "Severidade",
+        "Acción correctiva": "Ação corretiva",
+        "Fecha compromiso": "Data limite",
+        "Estado": "Status",
+        "Alto": "Alto",
+        "Medio": "Médio",
+        "Bajo": "Baixo",
+        "Abierto": "Aberto",
+        "En progreso": "Em andamento",
+        "Cerrado": "Fechado",
+        "Editar": "Editar",
+        "Acciones": "Ações",
+        "Buscar zona, descripción o acción": "Buscar zona, descrição ou ação",
+        "Limpiar filtros": "Limpar filtros",
+        "Editar seleccionado": "Editar selecionado",
+        "Eliminar seleccionado": "Excluir selecionado",
+        "Agregar foto": "Adicionar foto",
+        "Subir evidencia": "Enviar evidência",
+        "Sin fotos registradas.": "Nenhuma foto registrada.",
+        "Comentario": "Comentário",
+        "Subir": "Enviar",
+        "Eliminar foto": "Excluir foto",
+        "Tomar o seleccionar foto": "Tirar ou selecionar foto",
+        "Tomar foto": "Tirar foto", "Abrir la cámara del dispositivo": "Abrir a câmera do dispositivo",
+        "Cargar desde galería": "Carregar da galeria", "Seleccionar una imagen guardada": "Selecionar uma imagem salva",
+        "Fotos del hallazgo": "Fotos do achado", "Puedes seleccionar varias imágenes": "Você pode selecionar várias imagens",
+        "¿Eliminar esta foto?": "Excluir esta foto?",
+        "Registro fotográfico de evidencia": "Registro fotográfico de evidência",
+        "Exportar planta 5S": "Exportar planta 5S",
+        "Descargar ZIP (2 CSV)": "Baixar ZIP (2 CSV)",
+        "Descargar reporte PDF": "Baixar relatório PDF",
+        "Información de la planta": "Informações da planta",
+        "Idioma": "Idioma",
+        "General": "Geral",
+        "¿Eliminar esta planta 5S?": "Excluir esta planta 5S?",
+        "Campo requerido": "Campo obrigatório",
+        "opcional": "opcional",
+        "Evidencia fotográfica": "Evidência fotográfica",
+        "Puntaje por pilar": "Pontuação por pilar",
+        "Cerrar": "Fechar",
+        "Del catálogo": "Do catálogo",
+        "Resultados de auditorías": "Resultados das auditorias",
+        "Hallazgos por fase": "Achados por pilar",
+        "Estado de hallazgos": "Status dos achados",
+        "Evidencia fotográfica reciente": "Evidência fotográfica recente",
+        "Fase 5S": "Pilar 5S",
+        "filtrado por fase": "filtrado por pilar",
+        "Selecciona": "Selecione",
+        "País": "País",
+        "Editar planta": "Editar planta",
+        "separadas por coma": "separadas por vírgula",
+        "Áreas / zonas de la planta": "Áreas / zonas da planta",
+        "Catálogo de posibilidades": "Catálogo de possibilidades",
+        "Gestionar catálogo": "Gerenciar catálogo",
+        "Agregar al catálogo": "Adicionar ao catálogo",
+        "Volver": "Voltar",
+        "Planta": "Planta",
+        "Cronograma de Seguimiento": "Cronograma de acompanhamento",
+        "Filtros": "Filtros",
+        "Fecha desde": "Data de",
+        "Fecha hasta": "Data até",
+        "Rango rápido": "Intervalo rápido",
+        "Todo": "Tudo",
+        "Aplicar": "Aplicar",
+        "Gantt semanal": "Gantt semanal",
+        "Hallazgo": "Achado",
+        "Semana actual": "Semana atual",
+        "Todas": "Todas",
+        "Cronograma": "Cronograma",
+        "Fase": "Pilar", "Editar entrada": "Editar entrada",
+        "Catálogo de Países y Plantas": "Catálogo de Países e Plantas",
+        "Registro maestro reutilizable al crear una planta o registrar una auditoría/hallazgo.":
+            "Registro mestre reutilizável ao criar uma planta ou registrar uma auditoria/achado.",
+        "Sin entradas.": "Sem entradas.", "Agregar entrada": "Adicionar entrada", "Agregar": "Adicionar", "Otro": "Outro",
+        "¿Solo tiene lo que usa?": "Você só tem o que usa?",
+        "¿Es de fácil acceso?": "É de fácil acesso?",
+        "¿Los elementos están identificados?": "Os itens estão identificados?",
+        "¿Todo está en el lugar correcto?": "Tudo está no lugar correto?",
+        "¿El lugar está limpio?": "O local está limpo?",
+        "¿Los depósitos de basura contienen el tipo correcto?": "As lixeiras contêm o tipo correto de resíduo?",
+        "¿Organización general según la norma?": "Organização geral de acordo com a norma?",
+        "¿Se usan y actualizan los tableros de anuncios?": "Os quadros de avisos são usados e atualizados?",
+        "¿Se mantiene capacitación frecuente de 5S?": "O treinamento frequente de 5S é mantido?",
+        "¿Las 5S se implementan y se siguen?": "Os 5S são implementados e seguidos?",
+        "Herramientas o materiales innecesarios en el área": "Ferramentas ou materiais desnecessários na área",
+        "Documentación antigua o desactualizada no eliminada": "Documentação antiga ou desatualizada não eliminada",
+        "Equipos obsoletos almacenados sin motivo": "Equipamentos obsoletos armazenados sem motivo",
+        "Mezcla de materiales útiles con desechos": "Mistura de materiais úteis com resíduos",
+        "Falta identificación de lo que se debe descartar": "Falta identificação do que deve ser descartado",
+        "Herramientas sin lugar definido o mal ubicadas": "Ferramentas sem lugar definido ou mal posicionadas",
+        "Falta señalización en estanterías y cajones": "Falta sinalização em prateleiras e gavetas",
+        "Mala organización de cables y utensilios": "Má organização de cabos e utensílios",
+        "Dificultad para acceder a elementos frecuentes": "Dificuldade de acesso a itens frequentes",
+        "Áreas de almacenamiento sobrecargadas": "Áreas de armazenamento sobrecarregadas",
+        "Suciedad visible en maquinaria, pisos o superficies": "Sujeira visível em máquinas, pisos ou superfícies",
+        "Fugas de aceite, grasa o residuos sin atender": "Vazamentos de óleo, graxa ou resíduos sem atenção",
+        "Equipos con polvo acumulado o manchas": "Equipamentos com poeira acumulada ou manchas",
+        "Áreas de difícil acceso sin limpieza regular": "Áreas de difícil acesso sem limpeza regular",
+        "Falta cronograma o responsables de limpieza": "Falta cronograma ou responsáveis pela limpeza",
+        "Ausencia de procedimientos visuales o instructivos": "Ausência de procedimentos visuais ou instrutivos",
+        "Falta consistencia entre turnos": "Falta consistência entre turnos",
+        "Etiquetado inconsistente o incompleto": "Etiquetagem inconsistente ou incompleta",
+        "Señalética confusa o deteriorada": "Sinalização confusa ou deteriorada",
+        "No uso de formatos estandarizados": "Não uso de formatos padronizados",
+        "No cumplimiento de normas básicas de orden": "Não cumprimento de normas básicas de ordem",
+        "Falta de compromiso del personal con las 5S": "Falta de comprometimento da equipe com os 5S",
+        "No realización de auditorías internas periódicas": "Não realização de auditorias internas periódicas",
+        "Supervisores que no refuerzan la cultura 5S": "Supervisores que não reforçam a cultura 5S",
+        "Inexistencia de capacitaciones o seguimientos": "Inexistência de treinamentos ou acompanhamentos",
+        "Inspección de Seguridad": "Inspeção de Segurança",
+        "Inspección de Seguridad — Sitios": "Inspeção de Segurança — Locais",
+        "Recorridos de seguridad y hallazgos de zonas desordenadas, independiente del registro 5S.":
+            "Rondas de segurança e achados de zonas desorganizadas, independente do registro 5S.",
+        "Nuevo sitio": "Novo local",
+        "Total sitios": "Total de locais",
+        "Sin sitios registrados todavía.": "Nenhum local registrado ainda.",
+        "abiertos": "abertos", "hallazgos totales": "achados totais",
+        "Volver a sitios": "Voltar aos locais",
+        "Nombre del sitio": "Nome do local",
+        "Editar sitio": "Editar local",
+        "¿Eliminar este sitio de seguridad?": "Excluir este local de segurança?",
+        "Secciones del sitio": "Seções do local",
+        "Sitio activo": "Local ativo",
+        "Registro de hallazgos de seguridad": "Registro de achados de segurança",
+        "+ Nuevo hallazgo": "+ Novo achado",
+        "Fotos": "Fotos",
+        "Agregar fotos": "Adicionar fotos",
+        "Seleccionar fotos (puedes elegir varias)": "Selecionar fotos (você pode escolher várias)",
+        "Sin fotos en este hallazgo.": "Sem fotos neste achado.",
+        "Hallazgo de seguridad": "Achado de segurança",
+        "Cronograma de Seguimiento — Seguridad": "Cronograma de acompanhamento — Segurança",
+        "Sitio": "Local",
+        "Severidad: Todas": "Severidade: Todas",
+        "Sitio: Todos": "Local: Todos",
+        "Sin hallazgos en el rango seleccionado.": "Nenhum achado no intervalo selecionado.",
+        "Seguridad": "Segurança",
+        "Alcance / Notas": "Escopo / Notas",
+        "Hallazgos totales": "Total de achados",
+        "Abiertos": "Abertos",
+        "Cerrados": "Fechados",
+        "Severidad Alta": "Severidade Alta",
+        "Últimos hallazgos con fotos": "Últimos achados com fotos",
+        "Hallazgos de Seguridad": "Achados de Segurança",
+        "Zona": "Zona",
+        "Sin hallazgos registrados.": "Nenhum achado registrado.",
+        "¿Eliminar este hallazgo?": "Excluir este achado?",
+        "Editar hallazgo": "Editar achado",
+        "Nuevo hallazgo de Seguridad": "Novo Achado de Segurança",
+        "Completa al menos zona y descripción.": "Preencha pelo menos zona e descrição.",
+        "Descripción del hallazgo": "Descrição do achado",
+        "Fotos (puedes seleccionar varias a la vez)": "Fotos (você pode selecionar várias de uma vez)",
+        "Fotos de este hallazgo": "Fotos deste achado",
+    },
+}
+
+
+def tr(text):
+    lang = session.get("lang", "es")
+    if lang == "es":
+        return text
+    return TRANSLATIONS.get(lang, {}).get(text, text)
+
+TEMPLATES = {
+    'base.html': """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nefab 5S — Auditorías</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <img src="/logo.png" alt="Nefab" class="brand-logo">
+    <span class="app-name">Nefab 5S<small>Auditorías y Hallazgos</small></span>
+    {% if current_user %}
+    <div class="project-switch">
+      <a href="{{ url_for('plantas_list') }}" class="project-switch-btn {{ 'active' if project=='5s' else '' }}">5S</a>
+      <a href="{{ url_for('seg_sitios_list') }}" class="project-switch-btn {{ 'active' if project=='seguridad' else '' }}">Seguridad</a>
+    </div>
+    {% endif %}
+  </div>
+  <div class="topbar-right">
+    {% if current_user %}
+    <span class="user-email">{{ current_user.email }}{% if current_user.role == "admin" %} <span class="role-badge">ADMIN</span>{% endif %}</span>
+    {% endif %}
+    <select class="lang-select" onchange="window.location.href=this.value">
+      <option value="{{ url_for('set_lang', lang='es') }}" {{ 'selected' if session.get('lang','es')=='es' else '' }}>Español</option>
+      <option value="{{ url_for('set_lang', lang='en') }}" {{ 'selected' if session.get('lang','es')=='en' else '' }}>English</option>
+      <option value="{{ url_for('set_lang', lang='pt') }}" {{ 'selected' if session.get('lang','es')=='pt' else '' }}>Português</option>
+    </select>
+    {% if current_user %}
+    <span class="avatar" title="{{ current_user.email }}">{{ current_user.initials }}</span>
+    <a href="{{ url_for('logout') }}" class="lang-link">{{ tr("Salir") }}</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="layout">
+  <nav class="sidebar">
+    {% block sidebar %}{% endblock %}
+  </nav>
+  <main class="content">
+    {% block content %}{% endblock %}
+    <footer class="app-footer">© 2026 Nefab Group · Nefab 5S · Todos los derechos reservados</footer>
+  </main>
+</div>
+
+</body>
+</html>
+""",
+    'setup.html': """<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nefab 5S — Configuración inicial</title>
+<link rel="stylesheet" href="/style.css"></head>
+<body>
+<div class="auth-page">
+  <div class="auth-card">
+    <img src="/logo.png" alt="Nefab" class="brand-logo" style="margin-bottom:10px;">
+    <h2>Configuración inicial</h2>
+    <p class="muted">Aún no hay usuarios. Crea la cuenta de administrador.</p>
+    {% if error %}<p class="error-note">{{ error }}</p>{% endif %}
+    <form method="post">
+      <label>Correo</label>
+      <input type="email" name="email" required>
+      <label>Contraseña</label>
+      <input type="password" name="password" required minlength="6">
+      <div class="form-actions">
+        <button type="submit" class="btn-primary" style="width:100%;">Crear administrador</button>
+      </div>
+    </form>
+  </div>
+</div>
+</body></html>
+""",
+    'login.html': """<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nefab 5S — Iniciar sesión</title>
+<link rel="stylesheet" href="/style.css"></head>
+<body>
+<div class="auth-page">
+  <div class="auth-card">
+    <img src="/logo.png" alt="Nefab" class="brand-logo" style="margin-bottom:10px;">
+    <h2>Nefab 5S</h2>
+    <p class="muted">Inicia sesión para continuar.</p>
+    {% if error %}<p class="error-note">{{ error }}</p>{% endif %}
+    <form method="post">
+      <label>Correo</label>
+      <input type="email" name="email" required autofocus>
+      <label>Contraseña</label>
+      <input type="password" name="password" required>
+      <div class="form-actions">
+        <button type="submit" class="btn-primary" style="width:100%;">Iniciar sesión</button>
+      </div>
+    </form>
+  </div>
+</div>
+</body></html>
+""",
+    'admin_users.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('plantas_list') }}" class="sidebar-btn">← {{ tr("Volver a plantas") }}</a>
+  <div class="sidebar-label">Administración</div>
+  <a href="{{ url_for('admin_users') }}" class="sidebar-btn active">👤 Usuarios</a>
+{% endblock %}
+
+{% block content %}
+  <div class="table-toolbar">
+    <h2>Usuarios</h2>
+    <a href="{{ url_for('admin_user_new') }}" class="btn-primary">+ Nuevo usuario</a>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Correo</th><th>Rol</th><th>Acciones</th></tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.email }}</td>
+          <td><span class="pill {{ 'pill-red' if u.role=='admin' else 'pill-blue' }}">{{ 'Admin' if u.role=='admin' else 'Usuario' }}</span></td>
+          <td class="actions-cell">
+            {% if u.id != current.id %}
+            <form method="post" action="{{ url_for('admin_user_delete', uid=u.id) }}" style="display:inline;" onsubmit="return confirm('¿Eliminar este usuario?');">
+              <button type="submit" class="btn-mini btn-mini-danger">Eliminar</button>
+            </form>
+            {% else %}
+            <span class="muted">(tú)</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}
+""",
+    'cronograma.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('plantas_list') }}" class="sidebar-btn">← {{ tr("Volver a plantas") }}</a>
+{% endblock %}
+
+{% block content %}
+  <h2>{{ tr("Cronograma de Seguimiento") }}</h2>
+
+  <div class="chart-card" style="margin-bottom:16px;">
+    <h3>{{ tr("Filtros") }}</h3>
+    <form method="get" id="cron-form">
+      <div class="filters-bar" style="margin-bottom:10px;">
+        <select name="pais">
+          <option value="">{{ tr("País") }}: {{ tr("Todos") }}</option>
+          {% for pa in paises %}<option value="{{ pa }}" {{ 'selected' if pais_f==pa }}>{{ pa }}</option>{% endfor %}
+        </select>
+        <select name="estado">
+          <option value="">{{ tr("Estado") }}: {{ tr("Todos") }}</option>
+          {% for s in FINDING_STATUSES %}<option value="{{ s }}" {{ 'selected' if estado_f==s }}>{{ tr(s) }}</option>{% endfor %}
+        </select>
+        <select name="fase">
+          <option value="">{{ tr("Fase") }}: {{ tr("Todas") }}</option>
+          {% for f in FASES %}<option value="{{ f }}" {{ 'selected' if fase_f==f }}>{{ f }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="filters-bar">
+        <span class="muted" style="font-size:12px;">{{ tr("Fecha desde") }}</span>
+        <input type="date" name="date_from" id="cron-from" value="{{ date_from }}">
+        <span class="muted" style="font-size:12px;">{{ tr("Fecha hasta") }}</span>
+        <input type="date" name="date_to" id="cron-to" value="{{ date_to }}">
+        <span class="muted" style="font-size:12px;">{{ tr("Rango rápido") }}</span>
+        <button type="button" class="btn-icon-text" data-days="7">7d</button>
+        <button type="button" class="btn-icon-text" data-days="30">30d</button>
+        <button type="button" class="btn-icon-text" data-days="90">90d</button>
+        <button type="button" class="btn-icon-text" data-days="0">{{ tr("Todo") }}</button>
+        <button type="submit" class="btn-primary">▶ {{ tr("Aplicar") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="chart-card">
+    <h3>{{ tr("Gantt semanal") }}</h3>
+    <div class="table-wrap">
+      <table class="data-table gantt-table">
+        <thead>
+          <tr>
+            <th style="min-width:260px;">{{ tr("Área") }} / {{ tr("Hallazgo") }}</th>
+            {% for w in weeks %}<th class="{{ 'gantt-current' if w.is_current else '' }}">{{ w.label }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="gantt-row-label" style="border-left:5px solid {{ FASE_COLOR.get(r.pillar, NGR) }};">
+              [{{ r.area }}] {{ r.description }}
+              <div class="muted" style="font-size:10px;">{{ r.pais }} · {{ r.planta_name }}</div>
+            </td>
+            {% for w in weeks %}
+            <td class="{{ 'gantt-current' if w.is_current else '' }}">
+              {% if loop.index0 == r.week_idx %}
+              <span class="gantt-h {{ 'gantt-h-cerrado' if r.status=='Cerrado' else 'gantt-h-abierto' }}">H</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+          {% if not rows %}
+          <tr><td colspan="{{ weeks|length + 1 }}" class="muted-note">{{ tr("Sin hallazgos en el rango seleccionado.") }}</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    <div class="gantt-legend">
+      <span><span class="gantt-h gantt-h-abierto">H</span> {{ tr("Abierto") }}</span>
+      <span><span class="gantt-h gantt-h-cerrado">H</span> {{ tr("Cerrado") }}</span>
+      <span><span class="gantt-current-swatch"></span> {{ tr("Semana actual") }}</span>
+    </div>
+  </div>
+
+<script>
+document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var days = parseInt(btn.dataset.days, 10);
+    var to = new Date();
+    var toStr = to.toISOString().slice(0,10);
+    document.getElementById('cron-to').value = toStr;
+    if (days === 0) {
+      document.getElementById('cron-from').value = '2020-01-01';
+    } else {
+      var from = new Date();
+      from.setDate(from.getDate() - days);
+      document.getElementById('cron-from').value = from.toISOString().slice(0,10);
+    }
+    document.getElementById('cron-form').submit();
+  });
+});
+</script>
+{% endblock %}
+""",
+    'paises_plantas.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('plantas_list') }}" class="sidebar-btn">← {{ tr("Volver a plantas") }}</a>
+{% endblock %}
+
+{% block content %}
+  <h2>{{ tr("Catálogo de Países y Plantas") }}</h2>
+  <p class="muted-note">{{ tr("Registro maestro reutilizable al crear una planta o registrar una auditoría/hallazgo.") }}</p>
+
+  <div class="form-card" style="margin-bottom:20px;">
+    <h3 style="margin-top:0;">{{ tr("Editar entrada") if edit_item else tr("Agregar entrada") }}</h3>
+    <form method="post" action="{{ url_for('paises_plantas_add') }}">
+      <input type="hidden" name="pid" value="{{ pid }}">
+      {% if edit_idx is not none %}<input type="hidden" name="idx" value="{{ edit_idx }}">{% endif %}
+      <div class="form-row-3">
+        <div>
+          <label>{{ tr("País") }}</label>
+          <input type="text" name="pais" value="{{ edit_item.pais if edit_item else '' }}" required>
+        </div>
+        <div>
+          <label>{{ tr("Planta") }}</label>
+          <input type="text" name="planta" value="{{ edit_item.planta if edit_item else '' }}" required>
+        </div>
+        <div>
+          <label>{{ tr("Áreas / zonas de la planta") }} ({{ tr("separadas por coma") }})</label>
+          <input type="text" name="areas" value="{{ edit_item.areas|join(', ') if edit_item else '' }}" placeholder="Ej: Inbound, Packing, Outbound">
+        </div>
+      </div>
+      <div class="form-actions">
+        {% if edit_item %}
+        <a href="{{ url_for('paises_plantas_view', pid=pid) }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        {% endif %}
+        <button type="submit" class="btn-primary">{{ tr("Guardar") if edit_item else tr("Agregar") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>{{ tr("País") }}</th><th>{{ tr("Planta") }}</th><th>{{ tr("Áreas / zonas de la planta") }}</th><th>{{ tr("Acciones") }}</th></tr></thead>
+      <tbody>
+        {% for idx, r in registro %}
+        <tr>
+          <td>{{ r.pais }}</td>
+          <td>{{ r.planta }}</td>
+          <td>{{ r.areas|join(', ') }}</td>
+          <td class="actions-cell">
+            <a href="{{ url_for('paises_plantas_view', pid=pid, edit_idx=idx) }}" class="btn-mini">{{ tr("Editar") }}</a>
+            <form method="post" action="{{ url_for('paises_plantas_delete', idx=idx, pid=pid) }}" style="display:inline;" onsubmit="return confirm('¿Eliminar esta entrada?');">
+              <button type="submit" class="btn-mini btn-mini-danger">{{ tr("Eliminar") }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not registro %}
+        <tr><td colspan="4" class="muted-note">{{ tr("Sin entradas.") }}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}
+""",
+    'catalogo.html': """{% extends "base.html" %}
+{% block sidebar %}
+  {% if pid %}
+  <a href="{{ url_for('planta_hallazgos', pid=pid) }}" class="sidebar-btn">← {{ tr("Volver") }}</a>
+  {% else %}
+  <a href="{{ url_for('plantas_list') }}" class="sidebar-btn">← {{ tr("Volver a plantas") }}</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+  <h2>{{ tr("Catálogo de posibilidades") }}</h2>
+  <p class="muted-note">Catálogo global de descripciones sugeridas para hallazgos, compartido entre todas las plantas.</p>
+
+  <div class="form-card" style="margin-bottom:20px;">
+    <h3 style="margin-top:0;">{{ tr("Editar entrada") if edit_item else tr("Agregar al catálogo") }}</h3>
+    <form method="post" action="{{ url_for('catalogo_add') }}">
+      <input type="hidden" name="pid" value="{{ pid }}">
+      {% if edit_idx is not none %}<input type="hidden" name="idx" value="{{ edit_idx }}">{% endif %}
+      <div class="form-row-2">
+        <div>
+          <label>{{ tr("Fase") }}</label>
+          <select name="fase">
+            {% for f in FASES %}<option value="{{ f }}" {{ 'selected' if edit_item and edit_item.fase==f }}>{{ f }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>{{ tr("Descripción") }}</label>
+          <input type="text" name="descripcion" value="{{ edit_item.descripcion if edit_item else '' }}" required>
+        </div>
+      </div>
+      <div class="form-actions">
+        {% if edit_item %}
+        <a href="{{ url_for('catalogo_view', pid=pid) }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        {% endif %}
+        <button type="submit" class="btn-primary">{{ tr("Guardar") if edit_item else tr("Agregar al catálogo") }}</button>
+      </div>
+    </form>
+  </div>
+
+  {% for f in FASES %}
+  <div class="chart-card" style="margin-bottom:14px;">
+    <h3 style="color:{{ FASE_COLOR.get(f, NB) }};">{{ f }}</h3>
+    {% if grouped.get(f) %}
+    <table class="data-table">
+      <tbody>
+        {% for real_idx, c in grouped[f] %}
+        <tr>
+          <td>{{ tr(c.descripcion) }}</td>
+          <td class="actions-cell" style="width:150px;">
+            <a href="{{ url_for('catalogo_view', pid=pid, edit_idx=real_idx) }}" class="btn-mini">{{ tr("Editar") }}</a>
+            <form method="post" action="{{ url_for('catalogo_delete', idx=real_idx, pid=pid) }}" style="display:inline;" onsubmit="return confirm('¿Eliminar esta entrada del catálogo?');">
+              <button type="submit" class="btn-mini btn-mini-danger">{{ tr("Eliminar") }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted-note">Sin entradas.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+{% endblock %}
+""",
+    'admin_user_form.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('admin_users') }}" class="sidebar-btn">← Volver a usuarios</a>
+{% endblock %}
+
+{% block content %}
+  <div class="form-card">
+    <h2>Nuevo usuario</h2>
+    {% if error %}<p class="error-note">{{ error }}</p>{% endif %}
+    <form method="post">
+      <label>Correo</label>
+      <input type="email" name="email" required>
+      <label>Contraseña</label>
+      <input type="password" name="password" required minlength="6">
+      <label>Rol</label>
+      <select name="role">
+        <option value="user">Usuario</option>
+        <option value="admin">Administrador</option>
+      </select>
+      <div class="form-actions">
+        <a href="{{ url_for('admin_users') }}" class="btn-secondary">Cancelar</a>
+        <button type="submit" class="btn-primary">Crear usuario</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}
+""",
+    '_sidebar_planta.html': """<a href="{{ url_for('plantas_list') }}" class="sidebar-btn">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg>
+{{ tr("Volver a plantas") }}</a>
+<div class="sidebar-label">{{ p.get('name','') }}</div>
+<div class="sidebar-label">{{ tr("Secciones de la planta") }}</div>
+<a href="{{ url_for('planta_overview', pid=p.id) }}" class="sidebar-btn {{ 'active' if active=='Inicio' else '' }}">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l3-4"/><circle cx="12" cy="15" r="1"/></svg>
+{{ tr("Inicio") }}</a>
+<a href="{{ url_for('planta_auditorias', pid=p.id) }}" class="sidebar-btn {{ 'active' if active=='Auditorías' else '' }}">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+{{ tr("Auditorías") }}</a>
+<a href="{{ url_for('planta_hallazgos', pid=p.id) }}" class="sidebar-btn {{ 'active' if active=='Hallazgos' else '' }}">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none"/></svg>
+{{ tr("Hallazgos") }}</a>
+<a href="{{ url_for('cronograma_view') }}" class="sidebar-btn">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+{{ tr("Cronograma") }}</a>
+<a href="{{ url_for('planta_evidencia', pid=p.id) }}" class="sidebar-btn {{ 'active' if active=='Evidencias' else '' }}">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-2h6l2 2h3v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V8z"/><circle cx="12" cy="13" r="3.5"/></svg>
+{{ tr("Evidencias") }}</a>
+<a href="{{ url_for('planta_export', pid=p.id) }}" class="sidebar-btn {{ 'active' if active=='Exportar' else '' }}">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M8 11l4 4 4-4"/><path d="M4 19h16"/></svg>
+{{ tr("Exportar") }}</a>
+{% if current_user and current_user.role == "admin" %}
+<div class="sidebar-label">Administración</div>
+<a href="{{ url_for('admin_users') }}" class="sidebar-btn">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
+Usuarios</a>
+{% endif %}
+<div class="active-project-panel">
+  <div class="active-project-label">{{ tr("Planta activa") }}</div>
+  <div class="active-project-name">{{ p.get('name','') }}</div>
+  <div class="active-project-updated">{{ tr("Actualizado") }}: {{ p.get('updated_at', p.get('created_at','—')) }}</div>
+  <div class="active-project-status">🟢 {{ tr("Guardado") }}</div>
+</div>
+""",
+    'plantas_list.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <div class="sidebar-label">{{ tr("Plantas 5S Nefab") }}</div>
+  <a href="{{ url_for('new_planta_view') }}" class="sidebar-btn primary">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+  {{ tr("Nueva planta") }}</a>
+  <div class="sidebar-label">{{ tr("Filtrar por área") }}</div>
+  <a href="{{ url_for('plantas_list', area='Todos') }}" class="sidebar-btn {{ 'active' if area_filter=='Todos' else '' }}">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+  {{ tr("Todos") }}</a>
+  {% for a in AREAS %}
+  <a href="{{ url_for('plantas_list', area=a) }}" class="sidebar-btn {{ 'active' if area_filter==a else '' }}">
+    {% if a=='Logística' %}
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16V7a1 1 0 0 1 1-1h9v10"/><path d="M13 10h4l3 3v3h-7"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/></svg>
+    {% else %}
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20V10l6 4v-4l6 4V6l6 4v10z"/></svg>
+    {% endif %}
+    {{ tr(a) }}
+  </a>
+  {% endfor %}
+  <div class="sidebar-label">General</div>
+  <a href="{{ url_for('cronograma_view') }}" class="sidebar-btn">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+  {{ tr("Cronograma") }}</a>
+  <a href="{{ url_for('catalogo_view') }}" class="sidebar-btn">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13a2 2 0 0 1 2 2v14l-3-2-3 2-3-2-3 2-3-2-3 2V6a2 2 0 0 1 2-2z"/></svg>
+  {{ tr("Catálogo de posibilidades") }}</a>
+  <a href="{{ url_for('paises_plantas_view') }}" class="sidebar-btn">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12c0-5 4-9 10-9s10 4 10 9-4 9-10 9-10-4-10-9z"/><path d="M2 12h20"/><path d="M12 3c2.5 2.5 4 6 4 9s-1.5 6.5-4 9c-2.5-2.5-4-6-4-9s1.5-6.5 4-9z"/></svg>
+  {{ tr("Catálogo de Países y Plantas") }}</a>
+  {% if current_user and current_user.role == "admin" %}
+  <div class="sidebar-label">Administración</div>
+  <a href="{{ url_for('admin_users') }}" class="sidebar-btn">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
+  Usuarios</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+  <h1 class="page-title">{{ tr("Plantas 5S") }}</h1>
+
+  <div class="kpi-row">
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NB }}">{{ total }}</div><div class="kpi-label">{{ tr("Total plantas") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ n_log }}</div><div class="kpi-label">{{ tr("Logística") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NO }}">{{ n_man }}</div><div class="kpi-label">{{ tr("Manufactura") }}</div></div>
+  </div>
+
+  {% if not plantas %}
+    <p class="muted-note">{{ tr("Sin plantas en esta área.") }}</p>
+  {% endif %}
+
+  <div class="project-grid">
+    {% for p in plantas %}
+    <div class="project-card">
+      <div class="area-badge" style="background:{{ AREA_COLOR.get(p.get('area','Logística'), NB) }}">{{ tr(p.get('area','Logística')) }}</div>
+      <h3>{{ p.get('name','') }}</h3>
+      <p class="muted">{{ p.get('pais','') }}{% if p.get('pais') %} · {% endif %}{{ p.get('customer','') }} · {{ p.get('site','') }} · {{ p.get('created_at','') }}</p>
+      <p class="muted">{{ p._num_auditorias }} auditorías · {{ tr("Promedio general") }}: {{ p._promedio }}/5</p>
+      <div class="card-actions">
+        <a href="{{ url_for('planta_overview', pid=p.id) }}" class="btn-primary">{{ tr("Abrir") }}</a>
+        <a href="{{ url_for('edit_planta_view', pid=p.id) }}" class="btn-secondary">{{ tr("Editar") }}</a>
+        <form method="post" action="{{ url_for('delete_planta', pid=p.id) }}" onsubmit="return confirm('{{ tr('¿Eliminar esta planta 5S?') }}');" style="display:inline;">
+          <button type="submit" class="btn-danger">{{ tr("Eliminar") }}</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+{% endblock %}
+""",
+    'planta_form.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('plantas_list') }}" class="sidebar-btn">← {{ tr("Volver a plantas") }}</a>
+{% endblock %}
+
+{% block content %}
+  <div class="form-card">
+    <h2>{{ tr("Editar planta") if old else tr("Nueva planta") }}</h2>
+    <form method="post">
+      <div class="form-row-2">
+        <div>
+          <label>{{ tr("País") }}</label>
+          <select id="pp-pais">
+            <option value="">{{ tr("Selecciona") }}...</option>
+            {% for pa in registro|map(attribute='pais')|unique|sort %}<option value="{{ pa }}">{{ pa }}</option>{% endfor %}
+            <option value="__otro__">+ {{ tr("Otro") }}</option>
+          </select>
+          <input type="text" name="pais" id="pp-pais-text" value="{{ old.get('pais','') }}" placeholder="Ej: Chile, Brasil, México" style="margin-top:6px;">
+        </div>
+        <div>
+          <label>{{ tr("Planta") }} ({{ tr("Del catálogo") }})</label>
+          <select id="pp-planta">
+            <option value="">{{ tr("Selecciona") }}...</option>
+          </select>
+          <p class="muted-note" style="margin:4px 0 0;">
+            <a href="{{ url_for('paises_plantas_view') }}" target="_blank">{{ tr("Gestionar catálogo") }}</a>
+          </p>
+        </div>
+      </div>
+
+      <label>{{ tr("Nombre de la planta") }}</label>
+      <input type="text" name="name" id="pp-name" value="{{ old.get('name','') }}" required>
+
+      <label>{{ tr("Sitio / Operación") }}</label>
+      <input type="text" name="site" value="{{ old.get('site','') }}">
+
+      <label>{{ tr("Cliente") }}</label>
+      <input type="text" name="customer" value="{{ old.get('customer','') }}">
+
+      <label>{{ tr("Responsable") }}</label>
+      <input type="text" name="owner" value="{{ old.get('owner','') }}">
+
+      <label>{{ tr("Área") }}</label>
+      <select name="area">
+        {% for a in AREAS %}
+        <option value="{{ a }}" {{ 'selected' if old.get('area')==a }}>{{ tr(a) }}</option>
+        {% endfor %}
+      </select>
+
+      <label>{{ tr("Áreas / zonas de la planta") }} ({{ tr("separadas por coma") }})</label>
+      <input type="text" name="areas" id="pp-areas" value="{{ old.get('areas',[])|join(', ') }}" placeholder="Ej: Inbound, Packing, Woodshop, Outbound, Quality">
+
+      <label>{{ tr("Problema / Alcance") }}</label>
+      <textarea name="problem" rows="3">{{ old.get('problem','') }}</textarea>
+
+      <div class="form-actions">
+        <a href="{{ url_for('plantas_list') }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        <button type="submit" class="btn-primary">{{ tr("Guardar") if old else tr("Crear") }}</button>
+      </div>
+    </form>
+  </div>
+
+<script>
+(function(){
+  var REGISTRO = {{ registro|tojson }};
+  var paisSel = document.getElementById('pp-pais');
+  var paisText = document.getElementById('pp-pais-text');
+  var plantaSel = document.getElementById('pp-planta');
+  var nameInput = document.getElementById('pp-name');
+  var areasInput = document.getElementById('pp-areas');
+
+  function refreshPlantaOptions(){
+    var pais = paisSel.value === '__otro__' ? '' : paisSel.value;
+    plantaSel.innerHTML = '<option value="">Selecciona...</option>';
+    REGISTRO.filter(function(r){ return r.pais === pais; }).forEach(function(r){
+      var opt = document.createElement('option');
+      opt.value = r.planta;
+      opt.textContent = r.planta;
+      opt.dataset.areas = (r.areas || []).join(', ');
+      plantaSel.appendChild(opt);
+    });
+  }
+  paisSel.addEventListener('change', function(){
+    if (paisSel.value === '__otro__') {
+      paisText.style.display = '';
+      paisText.value = '';
+      paisText.focus();
+    } else if (paisSel.value) {
+      paisText.style.display = 'none';
+      paisText.value = paisSel.value;
+    }
+    refreshPlantaOptions();
+  });
+  plantaSel.addEventListener('change', function(){
+    var opt = plantaSel.options[plantaSel.selectedIndex];
+    if (!opt || !opt.value) return;
+    if (!nameInput.value) nameInput.value = opt.value;
+    if (opt.dataset.areas) areasInput.value = opt.dataset.areas;
+  });
+
+  // Al cargar: si ya hay un pais guardado (modo edicion), preseleccionar el select si existe en el catalogo.
+  var currentPais = paisText.value;
+  if (currentPais) {
+    var found = Array.prototype.slice.call(paisSel.options).some(function(o){ return o.value === currentPais; });
+    paisSel.value = found ? currentPais : '__otro__';
+    paisText.style.display = found ? 'none' : '';
+  } else {
+    paisText.style.display = 'none';
+  }
+  refreshPlantaOptions();
+})();
+</script>
+{% endblock %}
+""",
+    'planta_overview.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_planta.html" %}{% endblock %}
+
+{% block content %}
+  <div class="project-header">
+    <span class="area-badge" style="background:{{ AREA_COLOR.get(p.get('area','Logística'), NB) }}">{{ tr(p.get('area','Logística')) }}</span>
+    <span class="project-name">{{ p.get('name','') }}</span>
+    <span class="muted">{{ p.get('customer','') }} · {{ p.get('site','') }}</span>
+  </div>
+
+  <div class="kpi-row kpi-row-5">
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NB }}">{{ stats.promedio }}%</div><div class="kpi-label">{{ tr("Promedio general") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NGR }}">{{ stats.num_auditorias }}</div><div class="kpi-label">{{ tr("Auditorías realizadas") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ stats.abiertos }}</div><div class="kpi-label">{{ tr("Hallazgos abiertos") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ stats.cerrados }}</div><div class="kpi-label">{{ tr("Hallazgos cerrados") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NO }}">{{ stats.total_hallazgos }}</div><div class="kpi-label">{{ tr("Hallazgos") }}</div></div>
+  </div>
+
+  <div class="three-col">
+    <div class="chart-card">
+      <h3>{{ tr("Resultados de auditorías") }}</h3>
+      {% for clas, count in stats.resultado_counts.items() %}
+      <div class="progress-row">
+        <span class="progress-label">{{ CLASIFICACION_LABEL.get(clas, clas) }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.num_auditorias*100) if stats.num_auditorias else 0 }}%;background:{{ CLASIFICACION_COLOR.get(clas, NGR) }};"></div></div>
+        <span class="progress-value">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="chart-card">
+      <h3>{{ tr("Hallazgos por fase") }}</h3>
+      {% for f, count in stats.fase_counts.items() %}
+      <div class="progress-row">
+        <span class="progress-label">{{ f }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.total_hallazgos*100) if stats.total_hallazgos else 0 }}%;background:{{ FASE_COLOR.get(f, NGR) }};"></div></div>
+        <span class="progress-value">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="chart-card">
+      <h3>{{ tr("Estado de hallazgos") }}</h3>
+      {% for est, count in stats.estado_counts.items() %}
+      <div class="progress-row">
+        <span class="progress-label">{{ tr(est) }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.total_hallazgos*100) if stats.total_hallazgos else 0 }}%;background:{{ NG if est=='Cerrado' else (RED if est=='Abierto' else NO) }};"></div></div>
+        <span class="progress-value">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="chart-card">
+      <h3>{{ tr("Promedio por pilar") }} (última auditoría)</h3>
+      {% for pil in PILLARS %}
+      <div class="progress-row">
+        <span class="progress-label">{{ PILLAR_LABELS.get(pil, pil) }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ stats.pilares.get(pil,0) }}%;background:{{ NG if stats.pilares.get(pil,0) >= 80 else (NO if stats.pilares.get(pil,0) >= 60 else RED) }};"></div></div>
+        <span class="progress-value">{{ stats.pilares.get(pil,0) }}%</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="chart-card">
+      <h3>{{ tr("Información de la planta") }}</h3>
+      <table class="info-table">
+        <tr><td class="muted">{{ tr("País") }}</td><td>{{ p.get('pais','—') }}</td></tr>
+        <tr><td class="muted">{{ tr("Sitio / Operación") }}</td><td>{{ p.get('site','—') }}</td></tr>
+        <tr><td class="muted">{{ tr("Cliente") }}</td><td>{{ p.get('customer','—') }}</td></tr>
+        <tr><td class="muted">{{ tr("Responsable") }}</td><td>{{ p.get('owner','—') }}</td></tr>
+        <tr><td class="muted">{{ tr("Área") }}</td><td>{{ tr(p.get('area','Logística')) }}</td></tr>
+        <tr><td class="muted">{{ tr("Áreas / zonas de la planta") }}</td><td>{{ p.get('areas',[])|join(', ') or '—' }}</td></tr>
+        <tr><td class="muted">{{ tr("Problema / Alcance") }}</td><td>{{ p.get('problem','—') }}</td></tr>
+      </table>
+    </div>
+    <div class="chart-card" style="margin-top:12px;">
+      <a href="{{ url_for('edit_planta_view', pid=p.id) }}" class="btn-secondary" style="display:inline-block;">✏️ {{ tr("Editar planta") }}</a>
+    </div>
+  </div>
+
+  {% if p.get('evidence') %}
+  <div class="chart-card" style="margin-top:16px;">
+    <h3>{{ tr("Evidencia fotográfica reciente") }}</h3>
+    <div class="evidence-grid">
+      {% for ev in p.get('evidence',[])[-4:]|reverse %}
+      <div class="evidence-card">
+        <a href="{{ url_for('evidencia_photo', pid=p.id, filename=ev.filename) }}" target="_blank">
+          <img src="{{ url_for('evidencia_photo', pid=p.id, filename=ev.filename) }}" class="evidence-thumb">
+        </a>
+        <div class="evidence-caption">{{ ev.get('caption','') or '—' }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+{% endblock %}
+""",
+    'planta_auditorias.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_planta.html" %}{% endblock %}
+
+{% block content %}
+  <div class="table-toolbar">
+    <h2>{{ tr("Registro de auditorías") }}</h2>
+    <a href="{{ url_for('auditoria_form', pid=p.id) }}" class="btn-primary">{{ tr("+ Nueva auditoría") }}</a>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>{{ tr("Fecha") }}</th><th>{{ tr("Zona / Área") }}</th><th>{{ tr("Auditor") }}</th>
+          {% for f in FASES %}<th>{{ f }}</th>{% endfor %}
+          <th>% General</th><th>{{ tr("Estado") }}</th><th>{{ tr("Observaciones") }}</th><th>{{ tr("Acciones") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in p.get('auditorias',[]) %}
+        {% set clas = a.get('clasificacion') or clasificacion_pct(audit_avg(a)) %}
+        <tr>
+          <td>{{ a.get('fecha','') }}</td>
+          <td>{{ a.get('area','') or '-' }}</td>
+          <td>{{ a.get('auditor','') }}</td>
+          {% for f in FASES %}<td>{{ a.get('pct_' ~ FASE_KEYS.get(f, f), 0) }}%</td>{% endfor %}
+          <td><strong>{{ audit_avg(a) }}%</strong></td>
+          <td><span class="pill" style="background:{{ CLASIFICACION_COLOR.get(clas,NGR) }};color:#fff;">{{ CLASIFICACION_LABEL.get(clas, clas) }}</span></td>
+          <td class="muted">{{ a.get('notes','') or '-' }}</td>
+          <td class="actions-cell">
+            {% if a.get('evidencia') %}
+            <a href="{{ url_for('evidencia_photo', pid=p.id, filename=a.get('evidencia')) }}" target="_blank" class="btn-mini">📷</a>
+            {% endif %}
+            <a href="{{ url_for('auditoria_form', pid=p.id, idx=loop.index0) }}" class="btn-mini">{{ tr("Editar") }}</a>
+            <form method="post" action="{{ url_for('auditoria_delete', pid=p.id, idx=loop.index0) }}" style="display:inline;" onsubmit="return confirm('¿Eliminar?');">
+              <button type="submit" class="btn-mini btn-mini-danger">{{ tr("Eliminar") }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}
+""",
+    'auditoria_form.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_planta.html" %}{% endblock %}
+
+{% block content %}
+  <div class="form-card form-card-wide">
+    <h2>{{ tr("Nueva auditoría") }}</h2>
+    <form method="post" enctype="multipart/form-data">
+      <div class="form-row-3">
+        <div>
+          <label>{{ tr("Fecha") }}</label>
+          <input type="date" name="date" value="{{ old.get('fecha','') }}" required>
+        </div>
+        <div>
+          <label>{{ tr("Zona / Área") }}</label>
+          {% if p.get('areas') %}
+          <select name="area">
+            <option value="">—</option>
+            {% for ar in p.get('areas',[]) %}<option value="{{ ar }}" {{ 'selected' if old.get('area')==ar }}>{{ ar }}</option>{% endfor %}
+          </select>
+          {% else %}
+          <input type="text" name="area" value="{{ old.get('area','') }}" placeholder="Ej: Inbound, Packing, Woodshop">
+          {% endif %}
+        </div>
+        <div>
+          <label>{{ tr("Auditor") }}</label>
+          <input type="text" name="auditor" value="{{ old.get('auditor','') }}">
+        </div>
+      </div>
+
+      <div class="form-section-label">Check-List 5S</div>
+      {% set old_resp = old.get('respuestas', []) %}
+      {% for fase, pregunta in PREGUNTAS %}
+      {% set checked_val = old_resp[loop.index0] if loop.index0 < old_resp|length else none %}
+      <div class="checklist-row">
+        <span class="checklist-fase" style="color:{{ FASE_COLOR.get(fase, NB) }};">{{ fase }}</span>
+        <span class="checklist-question">{{ tr(pregunta) }}</span>
+        <div class="checklist-btns">
+          <label class="chk-btn chk-si"><input type="radio" name="q{{ loop.index0 }}" value="1" {{ 'checked' if checked_val == 1 else '' }}> ✓ Sí</label>
+          <label class="chk-btn chk-no"><input type="radio" name="q{{ loop.index0 }}" value="0" {{ 'checked' if checked_val == 0 else '' }}> ✗ No</label>
+        </div>
+      </div>
+      {% endfor %}
+
+      <div class="form-section-label">{{ tr("Evidencia fotográfica") }} ({{ tr("opcional") }})</div>
+      <input type="file" name="photo" accept="image/*" capture="environment">
+
+      <label style="margin-top:16px;">{{ tr("Observaciones") }}</label>
+      <textarea name="notes" rows="3">{{ old.get('notes','') }}</textarea>
+
+      <div class="form-actions">
+        <a href="{{ url_for('planta_auditorias', pid=p.id) }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        <button type="submit" class="btn-primary">{{ tr("Guardar") }}</button>
+      </div>
+    </form>
+  </div>
+
+<script>
+(function(){
+  // Refuerza visualmente la seleccion Si/No con JS (no depender solo de :has() en CSS,
+  // que puede fallar en algunos navegadores/WebViews).
+  document.querySelectorAll('.checklist-row').forEach(function(row){
+    var labels = row.querySelectorAll('.chk-btn');
+    function refresh(){
+      labels.forEach(function(lbl){
+        var input = lbl.querySelector('input');
+        lbl.classList.toggle('chk-selected', input.checked);
+      });
+    }
+    labels.forEach(function(lbl){
+      lbl.querySelector('input').addEventListener('change', refresh);
+    });
+    refresh();
+  });
+})();
+</script>
+{% endblock %}
+""",
+    'planta_hallazgos.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_planta.html" %}{% endblock %}
+
+{% block content %}
+  <div class="table-toolbar">
+    <h2>{{ tr("Registro de hallazgos") }}</h2>
+    <a href="{{ url_for('hallazgo_form', pid=p.id) }}" class="btn-primary">{{ tr("+ Nuevo hallazgo") }}</a>
+  </div>
+
+  <div class="filters-bar">
+    <input type="text" id="hz-search" placeholder="{{ tr('Buscar zona, descripción o acción') }}...">
+    <select id="filter-pillar">
+      <option value="">{{ tr("Pilar") }}: {{ tr("Todos") }}</option>
+      {% for f in FASES %}<option value="{{ f }}">{{ f }}</option>{% endfor %}
+    </select>
+    <select id="filter-severity">
+      <option value="">{{ tr("Severidad") }}: {{ tr("Todos") }}</option>
+      {% for s in SEVERITIES %}<option value="{{ s }}">{{ tr(s) }}</option>{% endfor %}
+    </select>
+    <select id="filter-status">
+      <option value="">{{ tr("Estado") }}: {{ tr("Todos") }}</option>
+      {% for s in FINDING_STATUSES %}<option value="{{ s }}">{{ tr(s) }}</option>{% endfor %}
+    </select>
+    <button type="button" id="btn-clear-filters" class="btn-secondary">🔄 {{ tr("Limpiar filtros") }}</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data-table" id="hallazgos-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="select-all"></th>
+          <th>#</th><th>{{ tr("Fecha") }}</th><th>{{ tr("País") }}</th><th>{{ tr("Planta") }}</th><th>{{ tr("Zona / Área") }}</th><th>{{ tr("Pilar") }}</th>
+          <th>{{ tr("Descripción") }}</th><th>{{ tr("Severidad") }}</th><th>{{ tr("Acción correctiva") }}</th>
+          <th>{{ tr("Responsable") }}</th><th>{{ tr("Fecha compromiso") }}</th><th>{{ tr("Estado") }}</th>
+          <th>{{ tr("Acciones") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in p.get('hallazgos',[]) %}
+        <tr data-idx="{{ loop.index0 }}"
+            data-search="{{ (h.get('area','') ~ ' ' ~ h.get('description','') ~ ' ' ~ h.get('corrective_action',''))|lower }}"
+            data-pillar="{{ h.get('pillar','') }}" data-severity="{{ h.get('severity','') }}" data-status="{{ h.get('status','') }}">
+          <td><input type="checkbox" class="row-select" value="{{ loop.index0 }}"></td>
+          <td class="muted">{{ loop.index }}</td>
+          <td>{{ h.get('date','') }}</td>
+          <td>{{ p.get('pais','—') }}</td>
+          <td>{{ p.get('name','') }}</td>
+          <td>{{ h.get('area','') }}</td>
+          <td>{{ h.get('pillar','') }}</td>
+          <td>{{ h.get('description','') }}</td>
+          <td><span class="pill {{ 'pill-red' if h.get('severity')=='Alto' else ('pill-orange' if h.get('severity')=='Medio' else 'pill-green') }}">{{ tr(h.get('severity','')) }}</span></td>
+          <td>{{ h.get('corrective_action','') or '-' }}</td>
+          <td>{{ h.get('responsible','') }}</td>
+          <td>{{ h.get('due_date','') or '-' }}</td>
+          <td><span class="pill {{ 'pill-green' if h.get('status')=='Cerrado' else ('pill-red' if h.get('status')=='Abierto' else 'pill-blue') }}">{{ tr(h.get('status','')) }}</span></td>
+          <td class="actions-cell">
+            {% if h.get('evidencia') %}
+            <a href="{{ url_for('evidencia_photo', pid=p.id, filename=h.get('evidencia')) }}" target="_blank" class="btn-mini">📷</a>
+            {% endif %}
+            <a href="{{ url_for('hallazgo_form', pid=p.id, idx=loop.index0) }}" class="btn-mini">{{ tr("Editar") }}</a>
+            {% if h.get('status') != 'Cerrado' %}
+            <form method="post" action="{{ url_for('hallazgo_close', pid=p.id, idx=loop.index0) }}" style="display:inline;">
+              <button type="submit" class="btn-mini" style="background:{{ NG }};">✔ {{ tr("Cerrar") }}</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted-note" id="row-count-note"></p>
+
+  <form method="post" id="bulk-delete-form" action="{{ url_for('hallazgos_bulk_delete', pid=p.id) }}"></form>
+  <div class="bulk-actions-bar">
+    <button type="button" id="btn-edit-selected" class="btn-primary" disabled>✏️ {{ tr("Editar seleccionado") }}</button>
+    <button type="button" id="btn-delete-selected" class="btn-danger" disabled>🗑️ {{ tr("Eliminar seleccionado") }}</button>
+  </div>
+
+<script>
+(function(){
+  var pid = "{{ p.id }}";
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#hallazgos-table tbody tr'));
+  var searchInput = document.getElementById('hz-search');
+  var fPillar = document.getElementById('filter-pillar');
+  var fSeverity = document.getElementById('filter-severity');
+  var fStatus = document.getElementById('filter-status');
+  var rowCountNote = document.getElementById('row-count-note');
+
+  function applyFilters(){
+    var q = (searchInput.value || '').toLowerCase();
+    var pil = fPillar.value, sev = fSeverity.value, st = fStatus.value;
+    var visible = 0;
+    rows.forEach(function(row){
+      var show = (!q || row.dataset.search.indexOf(q) > -1)
+        && (!pil || row.dataset.pillar === pil)
+        && (!sev || row.dataset.severity === sev)
+        && (!st || row.dataset.status === st);
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    rowCountNote.textContent = 'Mostrando ' + visible + ' de ' + rows.length;
+  }
+  [searchInput, fPillar, fSeverity, fStatus].forEach(function(el){
+    el.addEventListener('input', applyFilters);
+    el.addEventListener('change', applyFilters);
+  });
+  document.getElementById('btn-clear-filters').addEventListener('click', function(){
+    searchInput.value=''; fPillar.value=''; fSeverity.value=''; fStatus.value='';
+    applyFilters();
+  });
+  applyFilters();
+
+  var selectAll = document.getElementById('select-all');
+  var btnEdit = document.getElementById('btn-edit-selected');
+  var btnDelete = document.getElementById('btn-delete-selected');
+  function getSelected(){
+    return Array.prototype.slice.call(document.querySelectorAll('.row-select:checked'))
+      .filter(function(cb){ return cb.closest('tr').style.display !== 'none'; })
+      .map(function(cb){ return cb.value; });
+  }
+  function refreshBulkButtons(){
+    var sel = getSelected();
+    btnEdit.disabled = sel.length !== 1;
+    btnDelete.disabled = sel.length === 0;
+  }
+  document.querySelectorAll('.row-select').forEach(function(cb){ cb.addEventListener('change', refreshBulkButtons); });
+  selectAll.addEventListener('change', function(){
+    rows.forEach(function(row){ if (row.style.display !== 'none') row.querySelector('.row-select').checked = selectAll.checked; });
+    refreshBulkButtons();
+  });
+  btnEdit.addEventListener('click', function(){
+    var sel = getSelected();
+    if (sel.length === 1) window.location.href = '/planta/' + pid + '/hallazgos/save?idx=' + sel[0];
+  });
+  btnDelete.addEventListener('click', function(){
+    var sel = getSelected();
+    if (!sel.length) return;
+    if (!confirm('¿Eliminar ' + sel.length + ' hallazgo(s) seleccionado(s)?')) return;
+    var form = document.getElementById('bulk-delete-form');
+    form.innerHTML = '';
+    sel.forEach(function(idx){
+      var inp = document.createElement('input');
+      inp.type = 'hidden'; inp.name = 'idx'; inp.value = idx;
+      form.appendChild(inp);
+    });
+    form.submit();
+  });
+  refreshBulkButtons();
+})();
+</script>
+{% endblock %}
+""",
+    'hallazgo_form.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_planta.html" %}{% endblock %}
+
+{% block content %}
+  <div class="form-card form-card-wide">
+    <h2>{{ tr("Hallazgo 5S") }}</h2>
+    {% if error %}<p class="error-note">{{ tr("Campo requerido") }}</p>{% endif %}
+    <form method="post" enctype="multipart/form-data">
+      <div class="form-row-3">
+        <div>
+          <label>{{ tr("Fecha") }}</label>
+          <input type="date" name="date" value="{{ old.get('date','') }}">
+        </div>
+        <div>
+          <label>{{ tr("Zona / Área") }}</label>
+          {% if p.get('areas') %}
+          <select name="area" required>
+            <option value="">—</option>
+            {% for ar in p.get('areas',[]) %}<option value="{{ ar }}" {{ 'selected' if old.get('area')==ar }}>{{ ar }}</option>{% endfor %}
+          </select>
+          {% else %}
+          <input type="text" name="area" value="{{ old.get('area','') }}" required>
+          {% endif %}
+        </div>
+        <div>
+          <label>{{ tr("Fase 5S") }}</label>
+          <div class="fase-btns" id="hz-fase-btns">
+            {% for f in FASES %}
+            <label class="fase-btn" style="--fase-color:{{ FASE_COLOR.get(f, NB) }};">
+              <input type="radio" name="pillar" value="{{ f }}" {{ 'checked' if old.get('pillar')==f or (not old.get('pillar') and loop.first) else '' }}>
+              {{ FASE_KEYS.get(f, f) }}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <label>{{ tr("Del catálogo") }} ({{ tr("filtrado por fase") }}) — <a href="{{ url_for('catalogo_view', pid=p.id) }}" style="font-weight:400;font-size:11px;">{{ tr("Gestionar catálogo") }}</a></label>
+      <select id="hz-catalogo">
+        <option value="">{{ tr("Selecciona") }}...</option>
+      </select>
+
+      <label>{{ tr("Descripción") }}</label>
+      <textarea name="description" id="hz-desc" rows="2">{{ old.get('description','') }}</textarea>
+
+      <div class="form-row-2">
+        <div>
+          <label>{{ tr("Severidad") }}</label>
+          <select name="severity">
+            {% for s in SEVERITIES %}<option value="{{ s }}" {{ 'selected' if old.get('severity')==s }}>{{ tr(s) }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>{{ tr("Estado") }}</label>
+          <select name="status">
+            {% for s in FINDING_STATUSES %}<option value="{{ s }}" {{ 'selected' if old.get('status')==s }}>{{ tr(s) }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <label>{{ tr("Acción correctiva") }}</label>
+      <textarea name="corrective_action" rows="2">{{ old.get('corrective_action','') }}</textarea>
+
+      <div class="form-row-2">
+        <div>
+          <label>{{ tr("Responsable") }}</label>
+          <input type="text" name="responsible" value="{{ old.get('responsible','') }}">
+        </div>
+        <div>
+          <label>{{ tr("Fecha compromiso") }}</label>
+          <input type="date" name="due_date" value="{{ old.get('due_date','') }}">
+        </div>
+      </div>
+
+      <label>{{ tr("Evidencia fotográfica") }} ({{ tr("opcional") }})</label>
+      <div class="photo-source-grid">
+        <label class="photo-source-card">
+          <span class="photo-source-icon">📷</span>
+          <span><strong>{{ tr("Tomar foto") }}</strong><small>{{ tr("Abrir la cámara del dispositivo") }}</small></span>
+          <input type="file" name="photo_camera" accept="image/*" capture="environment">
+        </label>
+        <label class="photo-source-card">
+          <span class="photo-source-icon">🖼️</span>
+          <span><strong>{{ tr("Cargar desde galería") }}</strong><small>{{ tr("Seleccionar una imagen guardada") }}</small></span>
+          <input type="file" name="photo_gallery" accept="image/*">
+        </label>
+      </div>
+
+      <div class="form-actions">
+        <a href="{{ url_for('planta_hallazgos', pid=p.id) }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        <button type="submit" class="btn-primary">{{ tr("Guardar") }}</button>
+      </div>
+    </form>
+  </div>
+
+<script>
+(function(){
+  var CATALOGO = {{ catalogo|tojson }};
+  var faseBtnsContainer = document.getElementById('hz-fase-btns');
+  var faseRadios = faseBtnsContainer.querySelectorAll('input[type=radio]');
+  var catSel = document.getElementById('hz-catalogo');
+  var descTa = document.getElementById('hz-desc');
+
+  function getSelectedFase(){
+    var checked = faseBtnsContainer.querySelector('input:checked');
+    return checked ? checked.value : '';
+  }
+  function refreshFaseButtons(){
+    faseRadios.forEach(function(r){
+      r.closest('.fase-btn').classList.toggle('fase-selected', r.checked);
+    });
+  }
+  function refreshCatalogo(){
+    var fase = getSelectedFase();
+    catSel.innerHTML = '<option value="">Selecciona...</option>';
+    CATALOGO.filter(function(c){ return c.fase === fase; }).forEach(function(c){
+      var opt = document.createElement('option');
+      opt.value = c.descripcion;
+      opt.textContent = c.descripcion;
+      catSel.appendChild(opt);
+    });
+  }
+  faseRadios.forEach(function(r){
+    r.addEventListener('change', function(){ refreshFaseButtons(); refreshCatalogo(); });
+  });
+  catSel.addEventListener('change', function(){
+    if (catSel.value) descTa.value = catSel.value;
+  });
+  refreshFaseButtons();
+  refreshCatalogo();
+})();
+</script>
+{% endblock %}
+""",
+    'planta_evidencia.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_planta.html" %}{% endblock %}
+
+{% block content %}
+  <h2>{{ tr("Registro fotográfico de evidencia") }}</h2>
+
+  <div class="form-card" style="margin-bottom:20px;">
+    <form method="post" action="{{ url_for('evidencia_upload', pid=p.id) }}" enctype="multipart/form-data">
+      <label>{{ tr("Tomar o seleccionar foto") }}</label>
+      <input type="file" name="photo" accept="image/*" capture="environment" required>
+      <label>{{ tr("Comentario") }}</label>
+      <input type="text" name="caption" placeholder="Ej: Zona de Picking, pasillo B">
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">📷 {{ tr("Subir") }}</button>
+      </div>
+    </form>
+  </div>
+
+  {% if not p.get('evidence', []) %}
+    <p class="muted-note">{{ tr("Sin fotos registradas.") }}</p>
+  {% endif %}
+
+  <div class="evidence-grid">
+    {% for ev in p.get('evidence', [])|reverse %}
+    <div class="evidence-card">
+      <a href="{{ url_for('evidencia_photo', pid=p.id, filename=ev.filename) }}" target="_blank">
+        <img src="{{ url_for('evidencia_photo', pid=p.id, filename=ev.filename) }}" class="evidence-thumb">
+      </a>
+      <div class="evidence-caption">{{ ev.get('caption','') or '—' }}</div>
+      <div class="evidence-date">{{ ev.get('date','') }}</div>
+      <form method="post" action="{{ url_for('evidencia_delete', pid=p.id, filename=ev.filename) }}" onsubmit="return confirm('{{ tr('¿Eliminar esta foto?') }}');">
+        <button type="submit" class="btn-mini btn-mini-danger">{{ tr("Eliminar foto") }}</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+{% endblock %}
+""",
+    'planta_export.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_planta.html" %}{% endblock %}
+
+{% block content %}
+  <div class="form-card">
+    <h2>{{ tr("Exportar planta 5S") }}</h2>
+    <p class="muted">Exporta auditorías y hallazgos a CSV.</p>
+    <a href="{{ url_for('planta_export_zip', pid=p.id) }}" class="btn-primary" style="display:inline-block;margin-top:12px;">
+      📦 {{ tr("Descargar ZIP (2 CSV)") }}
+    </a>
+    <p class="muted" style="margin-top:18px;">Reporte PDF con información, KPIs, auditorías, hallazgos y evidencia fotográfica.</p>
+    <a href="{{ url_for('planta_report_pdf', pid=p.id) }}" class="btn-primary" style="display:inline-block;margin-top:4px;background:{{ RED }};">
+      📄 {{ tr("Descargar reporte PDF") }}
+    </a>
+  </div>
+{% endblock %}
+""",
+
+    '_sidebar_seg_sitio.html': """<a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg>
+{{ tr("Volver a sitios") }}</a>
+<div class="sidebar-label">{{ s.get('name','') }}</div>
+<div class="sidebar-label">{{ tr("Secciones del sitio") }}</div>
+<a href="{{ url_for('seg_sitio_overview', sid=s.id) }}" class="sidebar-btn {{ 'active' if active=='Inicio' else '' }}">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l3-4"/><circle cx="12" cy="15" r="1"/></svg>
+Inicio</a>
+<a href="{{ url_for('seg_hallazgos_list', sid=s.id) }}" class="sidebar-btn {{ 'active' if active=='Hallazgos' else '' }}">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none"/></svg>
+{{ tr("Hallazgos") }}</a>
+<a href="{{ url_for('seg_cronograma_view') }}" class="sidebar-btn">
+<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+{{ tr("Cronograma") }}</a>
+<div class="active-project-panel">
+  <div class="active-project-label">{{ tr("Sitio activo") }}</div>
+  <div class="active-project-name">{{ s.get('name','') }}</div>
+  <div class="active-project-updated">{{ tr("Actualizado") }}: {{ s.get('updated_at', s.get('created_at','—')) }}</div>
+  <div class="active-project-status">🟢 {{ tr("Guardado") }}</div>
+</div>
+""",
+
+    'seg_cronograma.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">← {{ tr("Volver a sitios") }}</a>
+{% endblock %}
+
+{% block content %}
+  <h2>{{ tr("Cronograma de Seguimiento — Seguridad") }}</h2>
+
+  <div class="chart-card" style="margin-bottom:16px;">
+    <h3>{{ tr("Filtros") }}</h3>
+    <form method="get" id="cron-form">
+      <div class="filters-bar" style="margin-bottom:10px;">
+        <select name="sitio">
+          <option value="">{{ tr("Sitio: Todos") }}</option>
+          {% for sn in sitios_names %}<option value="{{ sn }}" {{ 'selected' if sitio_f==sn }}>{{ sn }}</option>{% endfor %}
+        </select>
+        <select name="estado">
+          <option value="">{{ tr("Estado") }}: {{ tr("Todos") }}</option>
+          {% for s in FINDING_STATUSES %}<option value="{{ s }}" {{ 'selected' if estado_f==s }}>{{ tr(s) }}</option>{% endfor %}
+        </select>
+        <select name="severidad">
+          <option value="">{{ tr("Severidad: Todas") }}</option>
+          {% for s in SEVERITIES %}<option value="{{ s }}" {{ 'selected' if severidad_f==s }}>{{ tr(s) }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="filters-bar">
+        <span class="muted" style="font-size:12px;">{{ tr("Fecha desde") }}</span>
+        <input type="date" name="date_from" id="cron-from" value="{{ date_from }}">
+        <span class="muted" style="font-size:12px;">{{ tr("Fecha hasta") }}</span>
+        <input type="date" name="date_to" id="cron-to" value="{{ date_to }}">
+        <span class="muted" style="font-size:12px;">{{ tr("Rango rápido") }}</span>
+        <button type="button" class="btn-icon-text" data-days="7">7d</button>
+        <button type="button" class="btn-icon-text" data-days="30">30d</button>
+        <button type="button" class="btn-icon-text" data-days="90">90d</button>
+        <button type="button" class="btn-icon-text" data-days="0">{{ tr("Todo") }}</button>
+        <button type="submit" class="btn-primary">▶ {{ tr("Aplicar") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="chart-card">
+    <h3>{{ tr("Gantt semanal") }}</h3>
+    <div class="table-wrap">
+      <table class="data-table gantt-table">
+        <thead>
+          <tr>
+            <th style="min-width:260px;">{{ tr("Área") }} / {{ tr("Hallazgo") }}</th>
+            {% for w in weeks %}<th class="{{ 'gantt-current' if w.is_current else '' }}">{{ w.label }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          {% set sev_color = RED if r.severity=='Alto' else (NO if r.severity=='Medio' else NG) %}
+          <tr>
+            <td class="gantt-row-label" style="border-left:5px solid {{ sev_color }};">
+              [{{ r.area }}] {{ r.description }}
+              <div class="muted" style="font-size:10px;">{{ r.sitio_name }} · {{ tr(r.severity) }}</div>
+            </td>
+            {% for w in weeks %}
+            <td class="{{ 'gantt-current' if w.is_current else '' }}">
+              {% if loop.index0 == r.week_idx %}
+              <span class="gantt-h {{ 'gantt-h-cerrado' if r.status=='Cerrado' else 'gantt-h-abierto' }}">H</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+          {% if not rows %}
+          <tr><td colspan="{{ weeks|length + 1 }}" class="muted-note">{{ tr("Sin hallazgos en el rango seleccionado.") }}</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    <div class="gantt-legend">
+      <span><span class="gantt-h gantt-h-abierto">H</span> {{ tr("Abierto") }}</span>
+      <span><span class="gantt-h gantt-h-cerrado">H</span> {{ tr("Cerrado") }}</span>
+      <span><span class="gantt-current-swatch"></span> {{ tr("Semana actual") }}</span>
+    </div>
+  </div>
+
+<script>
+document.querySelectorAll('#cron-form [data-days]').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var days = parseInt(btn.dataset.days, 10);
+    var to = new Date();
+    var toStr = to.toISOString().slice(0,10);
+    document.getElementById('cron-to').value = toStr;
+    if (days === 0) {
+      document.getElementById('cron-from').value = '2020-01-01';
+    } else {
+      var from = new Date();
+      from.setDate(from.getDate() - days);
+      document.getElementById('cron-from').value = from.toISOString().slice(0,10);
+    }
+    document.getElementById('cron-form').submit();
+  });
+});
+</script>
+{% endblock %}
+""",
+
+    'seg_sitios_list.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <div class="sidebar-label">Inspección de Seguridad</div>
+  <a href="{{ url_for('seg_sitio_new') }}" class="sidebar-btn primary">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+  {{ tr("Nuevo sitio") }}</a>
+  <a href="{{ url_for('seg_cronograma_view') }}" class="sidebar-btn">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+  {{ tr("Cronograma") }}</a>
+{% endblock %}
+
+{% block content %}
+  <h1 class="page-title">{{ tr("Inspección de Seguridad — Sitios") }}</h1>
+  <p class="muted-note">{{ tr("Recorridos de seguridad y hallazgos de zonas desordenadas, independiente del registro 5S.") }}</p>
+
+  <div class="kpi-row">
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NB }}">{{ sitios|length }}</div><div class="kpi-label">{{ tr("Total sitios") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ total_abiertos }}</div><div class="kpi-label">{{ tr("Hallazgos abiertos") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ total_cerrados }}</div><div class="kpi-label">{{ tr("Hallazgos cerrados") }}</div></div>
+  </div>
+
+  {% if not sitios %}
+    <p class="muted-note">{{ tr("Sin sitios registrados todavía.") }}</p>
+  {% endif %}
+
+  <div class="project-grid">
+    {% for s in sitios %}
+    <div class="project-card">
+      <div class="area-badge" style="background:{{ NGR }}">{{ tr("Seguridad") }}</div>
+      <h3>{{ s.get('name','') }}</h3>
+      <p class="muted">{{ s.get('customer','') }} · {{ s.get('site','') }} · {{ s.get('created_at','') }}</p>
+      <p class="muted">{{ s._n_abiertos }} {{ tr("abiertos") }} · {{ s._n_total }} {{ tr("hallazgos totales") }}</p>
+      <div class="card-actions">
+        <a href="{{ url_for('seg_sitio_overview', sid=s.id) }}" class="btn-primary">{{ tr("Abrir") }}</a>
+        <a href="{{ url_for('seg_sitio_edit', sid=s.id) }}" class="btn-secondary">{{ tr("Editar") }}</a>
+        <form method="post" action="{{ url_for('seg_sitio_delete', sid=s.id) }}" onsubmit="return confirm('{{ tr('¿Eliminar este sitio de seguridad?') }}');" style="display:inline;">
+          <button type="submit" class="btn-danger">{{ tr("Eliminar") }}</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+{% endblock %}
+""",
+
+    'seg_sitio_form.html': """{% extends "base.html" %}
+{% block sidebar %}
+  <a href="{{ url_for('seg_sitios_list') }}" class="sidebar-btn">← {{ tr("Volver a sitios") }}</a>
+{% endblock %}
+
+{% block content %}
+  <div class="form-card">
+    <h2>{{ tr("Editar sitio") if old else tr("Nuevo sitio") }}</h2>
+    <form method="post">
+      <label>{{ tr("Nombre del sitio") }}</label>
+      <input type="text" name="name" value="{{ old.get('name','') }}" required>
+      <label>{{ tr("Sitio / Operación") }}</label>
+      <input type="text" name="site" value="{{ old.get('site','') }}">
+      <label>{{ tr("Cliente") }}</label>
+      <input type="text" name="customer" value="{{ old.get('customer','') }}">
+      <label>{{ tr("Responsable") }}</label>
+      <input type="text" name="owner" value="{{ old.get('owner','') }}">
+      <label>{{ tr("Alcance / Notas") }}</label>
+      <textarea name="problem" rows="3">{{ old.get('problem','') }}</textarea>
+      <div class="form-actions">
+        <a href="{{ url_for('seg_sitios_list') }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        <button type="submit" class="btn-primary">{{ tr("Guardar") if old else tr("Crear") }}</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}
+""",
+
+    'seg_sitio_overview.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_seg_sitio.html" %}{% endblock %}
+
+{% block content %}
+  <div class="project-header">
+    <span class="area-badge" style="background:{{ NGR }}">{{ tr("Seguridad") }}</span>
+    <span class="project-name">{{ s.get('name','') }}</span>
+    <span class="muted">{{ s.get('customer','') }} · {{ s.get('site','') }}</span>
+  </div>
+
+  <div class="kpi-row kpi-row-5">
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NGR }}">{{ stats.total }}</div><div class="kpi-label">{{ tr("Hallazgos totales") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ stats.abiertos }}</div><div class="kpi-label">{{ tr("Abiertos") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NO }}">{{ stats.en_progreso }}</div><div class="kpi-label">{{ tr("En progreso") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ NG }}">{{ stats.cerrados }}</div><div class="kpi-label">{{ tr("Cerrados") }}</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:{{ RED }}">{{ stats.severidad_alta }}</div><div class="kpi-label">{{ tr("Severidad Alta") }}</div></div>
+  </div>
+
+  <div class="two-col">
+    <div class="chart-card">
+      <h3>{{ tr("Estado de hallazgos") }}</h3>
+      {% for est, count in stats.estado_counts.items() %}
+      <div class="progress-row">
+        <span class="progress-label">{{ tr(est) }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.total*100) if stats.total else 0 }}%;background:{{ NG if est=='Cerrado' else (RED if est=='Abierto' else NO) }};"></div></div>
+        <span class="progress-value">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="chart-card">
+      <h3>{{ tr("Severidad") }}</h3>
+      {% for sev, count in stats.severidad_counts.items() %}
+      <div class="progress-row">
+        <span class="progress-label">{{ tr(sev) }}</span>
+        <div class="progress-track"><div class="progress-fill" style="width:{{ (count/stats.total*100) if stats.total else 0 }}%;background:{{ RED if sev=='Alto' else (NO if sev=='Medio' else NG) }};"></div></div>
+        <span class="progress-value">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if s.get('problem') %}
+  <div class="chart-card" style="margin-top:14px;">
+    <h3>{{ tr("Alcance / Notas") }}</h3>
+    <p style="font-size:13px;">{{ s.get('problem') }}</p>
+  </div>
+  {% endif %}
+
+  {% set recientes = s.get('hallazgos',[])[:4] %}
+  {% if recientes %}
+  <div class="chart-card" style="margin-top:16px;">
+    <h3>{{ tr("Últimos hallazgos con fotos") }}</h3>
+    <div class="evidence-grid">
+      {% for h in recientes %}
+        {% for foto in h.fotos[:2] %}
+        <div class="evidence-card">
+          <a href="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" target="_blank">
+            <img src="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" class="evidence-thumb">
+          </a>
+          <div class="evidence-caption">{{ h.area }}: {{ h.description[:40] }}</div>
+        </div>
+        {% endfor %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+{% endblock %}
+""",
+
+    'seg_hallazgos_list.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_seg_sitio.html" %}{% endblock %}
+
+{% block content %}
+  <div class="table-toolbar">
+    <h2>{{ tr("Hallazgos de Seguridad") }}</h2>
+    <a href="{{ url_for('seg_hallazgo_form', sid=s.id) }}" class="btn-primary">{{ tr("+ Nuevo hallazgo") }}</a>
+  </div>
+
+  <div class="filters-bar">
+    <select id="filter-severity">
+      <option value="">{{ tr("Severidad") }}: {{ tr("Todos") }}</option>
+      {% for sv in SEVERITIES %}<option value="{{ sv }}">{{ tr(sv) }}</option>{% endfor %}
+    </select>
+    <select id="filter-status">
+      <option value="">{{ tr("Estado") }}: {{ tr("Todos") }}</option>
+      {% for st in FINDING_STATUSES %}<option value="{{ st }}">{{ tr(st) }}</option>{% endfor %}
+    </select>
+    <button type="button" id="btn-clear-filters" class="btn-secondary">🔄 {{ tr("Limpiar filtros") }}</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="data-table" id="hallazgos-table">
+      <thead>
+        <tr>
+          <th>{{ tr("Fecha") }}</th><th>{{ tr("Zona") }}</th><th>{{ tr("Descripción") }}</th><th>{{ tr("Severidad") }}</th>
+          <th>{{ tr("Responsable") }}</th><th>{{ tr("Fecha compromiso") }}</th><th>{{ tr("Estado") }}</th><th>{{ tr("Fotos") }}</th><th>{{ tr("Acciones") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in s.get('hallazgos',[]) %}
+        <tr data-severity="{{ h.severity }}" data-status="{{ h.status }}">
+          <td>{{ h.date }}</td>
+          <td>{{ h.area }}</td>
+          <td>{{ h.description }}</td>
+          <td><span class="pill {{ 'pill-red' if h.severity=='Alto' else ('pill-orange' if h.severity=='Medio' else 'pill-green') }}">{{ tr(h.severity) }}</span></td>
+          <td>{{ h.responsible or '-' }}</td>
+          <td>{{ h.due_date or '-' }}</td>
+          <td><span class="pill {{ 'pill-green' if h.status=='Cerrado' else ('pill-red' if h.status=='Abierto' else 'pill-blue') }}">{{ tr(h.status) }}</span></td>
+          <td>
+            {% for foto in h.fotos[:3] %}
+            <a href="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" target="_blank">📷</a>
+            {% endfor %}
+            {% if h.fotos|length > 3 %}<span class="muted">+{{ h.fotos|length - 3 }}</span>{% endif %}
+            {% if not h.fotos %}<span class="muted">—</span>{% endif %}
+          </td>
+          <td class="actions-cell">
+            <a href="{{ url_for('seg_hallazgo_form', sid=s.id, hid=h.id) }}" class="btn-mini">{{ tr("Editar") }}</a>
+            {% if h.status != 'Cerrado' %}
+            <form method="post" action="{{ url_for('seg_hallazgo_close', sid=s.id, hid=h.id) }}" style="display:inline;">
+              <button type="submit" class="btn-mini" style="background:{{ NG }};">✔ {{ tr("Cerrar") }}</button>
+            </form>
+            {% endif %}
+            <form method="post" action="{{ url_for('seg_hallazgo_delete', sid=s.id, hid=h.id) }}" style="display:inline;" onsubmit="return confirm('{{ tr('¿Eliminar este hallazgo?') }}');">
+              <button type="submit" class="btn-mini btn-mini-danger">{{ tr("Eliminar") }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not s.get('hallazgos') %}
+        <tr><td colspan="9" class="muted-note">{{ tr("Sin hallazgos registrados.") }}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+<script>
+(function(){
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#hallazgos-table tbody tr[data-status]'));
+  var fSeverity = document.getElementById('filter-severity');
+  var fStatus = document.getElementById('filter-status');
+  function applyFilters(){
+    var sev = fSeverity.value, st = fStatus.value;
+    rows.forEach(function(row){
+      var show = (!sev || row.dataset.severity === sev) && (!st || row.dataset.status === st);
+      row.style.display = show ? '' : 'none';
+    });
+  }
+  [fSeverity, fStatus].forEach(function(el){ el.addEventListener('change', applyFilters); });
+  document.getElementById('btn-clear-filters').addEventListener('click', function(){
+    fSeverity.value=''; fStatus.value=''; applyFilters();
+  });
+})();
+</script>
+{% endblock %}
+""",
+
+    'seg_hallazgo_form.html': """{% extends "base.html" %}
+{% block sidebar %}{% include "_sidebar_seg_sitio.html" %}{% endblock %}
+
+{% block content %}
+  <div class="form-card form-card-wide">
+    <h2>{{ tr("Editar hallazgo") if old else tr("Nuevo hallazgo de Seguridad") }}</h2>
+    {% if error %}<p class="error-note">{{ tr("Completa al menos zona y descripción.") }}</p>{% endif %}
+    <form method="post" enctype="multipart/form-data">
+      <div class="form-row-3">
+        <div>
+          <label>{{ tr("Fecha") }}</label>
+          <input type="date" name="date" value="{{ old.get('date', today) }}">
+        </div>
+        <div>
+          <label>{{ tr("Zona / Área") }}</label>
+          <input type="text" name="area" value="{{ old.get('area','') }}" required placeholder="Ej: Bodega, Pasillo B">
+        </div>
+        <div>
+          <label>{{ tr("Severidad") }}</label>
+          <select name="severity">
+            {% for sv in SEVERITIES %}<option value="{{ sv }}" {{ 'selected' if old.get('severity')==sv }}>{{ tr(sv) }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <label>{{ tr("Descripción del hallazgo") }}</label>
+      <textarea name="description" rows="3" required>{{ old.get('description','') }}</textarea>
+
+      <div class="form-row-2">
+        <div>
+          <label>{{ tr("Responsable") }}</label>
+          <input type="text" name="responsible" value="{{ old.get('responsible','') }}">
+        </div>
+        <div>
+          <label>{{ tr("Fecha compromiso") }}</label>
+          <input type="date" name="due_date" value="{{ old.get('due_date','') }}">
+        </div>
+      </div>
+
+      <label>{{ tr("Estado") }}</label>
+      <select name="status">
+        {% for st in FINDING_STATUSES %}<option value="{{ st }}" {{ 'selected' if old.get('status')==st }}>{{ tr(st) }}</option>{% endfor %}
+      </select>
+
+      <label>{{ tr("Fotos del hallazgo") }} ({{ tr("opcional") }})</label>
+      <div class="photo-source-grid">
+        <label class="photo-source-card">
+          <span class="photo-source-icon">📷</span>
+          <span><strong>{{ tr("Tomar foto") }}</strong><small>{{ tr("Abrir la cámara del dispositivo") }}</small></span>
+          <input type="file" name="photos_camera" accept="image/*" capture="environment">
+        </label>
+        <label class="photo-source-card">
+          <span class="photo-source-icon">🖼️</span>
+          <span><strong>{{ tr("Cargar desde galería") }}</strong><small>{{ tr("Puedes seleccionar varias imágenes") }}</small></span>
+          <input type="file" name="photos_gallery" accept="image/*" multiple>
+        </label>
+      </div>
+
+      <div class="form-actions">
+        <a href="{{ url_for('seg_hallazgos_list', sid=s.id) }}" class="btn-secondary">{{ tr("Cancelar") }}</a>
+        <button type="submit" class="btn-primary">{{ tr("Guardar") }}</button>
+      </div>
+    </form>
+  </div>
+
+  {% if old and old.get('fotos') %}
+  <div class="chart-card" style="max-width:760px;">
+    <h3>{{ tr("Fotos de este hallazgo") }} ({{ old.fotos|length }})</h3>
+    <div class="evidence-grid">
+      {% for foto in old.fotos %}
+      <div class="evidence-card">
+        <a href="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" target="_blank">
+          <img src="{{ url_for('seg_foto', sid=s.id, filename=foto.filename) }}" class="evidence-thumb">
+        </a>
+        <form method="post" action="{{ url_for('seg_foto_delete', sid=s.id, hid=old.id, foto_id=foto.id) }}" onsubmit="return confirm('{{ tr('¿Eliminar esta foto?') }}');">
+          <button type="submit" class="btn-mini btn-mini-danger" style="margin-top:6px;">{{ tr("Eliminar foto") }}</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+{% endblock %}
+""",
+}
+
 
 NEFAB_LOGO_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAPAAAABiCAYAAABu+17aAAA5R0lEQVR42u19e3xcVbX/d+19zpmZPJvMpA9EAeUH2vouD6+vFAEp"
@@ -253,187 +2265,7 @@ NEFAB_LOGO_B64 = (
     "d6lNaz9zPWIAAAAASUVORK5CYII="
 )
 
-
-app = Flask(__name__)
-app.secret_key = SECRET_KEY
-
-
-# --------------------------------------------------------------------------
-# DB helpers
-# --------------------------------------------------------------------------
-def get_db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON")
-    return g.db
-
-
-@app.teardown_appcontext
-def close_db(exception=None):
-    db = g.pop("db", None)
-    if db is not None:
-        db.close()
-
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'user',
-            activo INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS vas_records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            delivery TEXT,
-            area TEXT NOT NULL,
-            fecha TEXT NOT NULL,
-            nombre TEXT NOT NULL,
-            wc_bc TEXT NOT NULL,
-            horas REAL NOT NULL DEFAULT 0,
-            tarea TEXT NOT NULL,
-            observaciones TEXT,
-            created_by TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS materiales (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT UNIQUE NOT NULL,
-            nombre TEXT NOT NULL,
-            categoria TEXT NOT NULL,
-            unidad TEXT NOT NULL,
-            stock_minimo REAL NOT NULL DEFAULT 0,
-            activo INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS movimientos_inventario (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            material_id INTEGER NOT NULL,
-            tipo TEXT NOT NULL,
-            cantidad REAL NOT NULL,
-            lote_ot TEXT,
-            delivery TEXT,
-            fecha TEXT NOT NULL,
-            responsable TEXT,
-            observaciones TEXT,
-            created_by TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY (material_id) REFERENCES materiales(id)
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS calidad_registros (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tipo TEXT NOT NULL,
-            fecha TEXT NOT NULL,
-            guia TEXT,
-            delivery TEXT,
-            cliente TEXT,
-            item TEXT,
-            descripcion_material TEXT,
-            cantidad REAL,
-            ubicacion TEXT,
-            cantidad_sistema REAL,
-            cantidad_fisica REAL,
-            peso_kg REAL,
-            proceso TEXT,
-            rdel TEXT,
-            motivo TEXT,
-            causa_raiz TEXT,
-            acciones_correctivas TEXT,
-            responsable TEXT,
-            estado TEXT NOT NULL DEFAULT 'Pendiente',
-            observaciones TEXT,
-            created_by TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    conn.commit()
-
-    # Migraciones seguras para bases de datos ya existentes (creadas antes de
-    # agregar estas columnas). Si la columna ya existe, sqlite lanza
-    # OperationalError y lo ignoramos.
-    migrations = [
-        "ALTER TABLE users ADD COLUMN activo INTEGER NOT NULL DEFAULT 1",
-        "ALTER TABLE movimientos_inventario ADD COLUMN delivery TEXT",
-        "ALTER TABLE calidad_registros ADD COLUMN peso_kg REAL",
-        "ALTER TABLE calidad_registros ADD COLUMN proceso TEXT",
-        "ALTER TABLE calidad_registros ADD COLUMN rdel TEXT",
-    ]
-    for stmt in migrations:
-        try:
-            conn.execute(stmt)
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass
-
-    # Seed admin user si no existe ninguno
-    cur = conn.execute("SELECT COUNT(*) AS c FROM users")
-    if cur.fetchone()[0] == 0:
-        conn.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-            ("admin", generate_password_hash("nefab2026"), "admin")
-        )
-        conn.commit()
-    conn.close()
-
-
-# --------------------------------------------------------------------------
-# Auth helpers
-# --------------------------------------------------------------------------
-def login_required(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if "user_id" not in session:
-            return redirect(url_for("login", next=request.path))
-        return f(*args, **kwargs)
-    return wrapper
-
-
-def admin_required(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if "user_id" not in session:
-            return redirect(url_for("login", next=request.path))
-        if session.get("role") != "admin":
-            flash("No tienes permisos de administrador para esta acción.", "error")
-            return redirect(url_for("hub"))
-        return f(*args, **kwargs)
-    return wrapper
-
-
-def current_user():
-    if "user_id" not in session:
-        return None
-    return {"id": session["user_id"], "username": session.get("username"),
-            "role": session.get("role")}
-
-
-# --------------------------------------------------------------------------
-# Templates (embebidos para mantener un solo archivo)
-# --------------------------------------------------------------------------
-BASE_HEAD = """
-<!doctype html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ title }} - Nefab Operaciones</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-<style>
-:root{
+STYLE_CSS = """:root{
   --blue:#144E8C; --dark:#0D3A6E; --orange:#FE8200; --green:#8CC24A;
   --gray:#88888D; --red:#E34948; --bg:#F4F6FB; --card:#FFFFFF;
   --border:#E2E8F0; --text:#1E293B; --muted:#64748B;
@@ -448,20 +2280,31 @@ a{text-decoration:none;color:inherit;}
   position:sticky;top:0;z-index:10;
 }
 .topbar-left{display:flex;align-items:center;gap:12px;overflow:hidden;}
+.brand{font-weight:700;color:#fff;font-size:15px;white-space:nowrap;line-height:1.1;}
 .brand-logo{height:26px;width:auto;display:block;filter:brightness(0) invert(1);}
+.brand small{display:block;font-size:7px;color:rgba(255,255,255,0.65);font-weight:400;letter-spacing:1px;}
 .app-name{font-weight:600;font-size:14px;color:#fff;border-left:1px solid rgba(255,255,255,0.25);padding-left:10px;white-space:nowrap;}
+.project-switch{display:flex;gap:4px;margin-left:14px;background:rgba(255,255,255,0.1);border-radius:20px;padding:3px;}
+.project-switch-btn{padding:5px 12px;border-radius:16px;font-size:12px;font-weight:600;color:rgba(255,255,255,0.75);white-space:nowrap;}
+.project-switch-btn:hover{color:#fff;}
+.project-switch-btn.active{background:var(--orange);color:#fff;}
 .app-name small{display:block;font-size:11px;color:rgba(255,255,255,0.65);font-weight:400;}
 .topbar-right{display:flex;align-items:center;gap:10px;flex-shrink:0;}
+.lang-select{background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.3);
+  border-radius:6px;padding:5px 8px;font-size:12px;font-weight:600;}
+.lang-select option{color:#000;}
 .avatar{width:30px;height:30px;border-radius:50%;background:var(--orange);color:#fff;
   display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;}
 .user-email{font-size:12px;color:rgba(255,255,255,0.85);white-space:nowrap;}
 .role-badge{background:var(--orange);color:#fff;font-size:9px;font-weight:700;padding:1px 6px;border-radius:4px;}
+.topbar .lang-link{color:rgba(255,255,255,0.75);}
+.topbar .lang-link.active{background:rgba(255,255,255,0.2);color:#fff;}
 
 .auth-page{min-height:100vh;display:flex;align-items:center;justify-content:center;
   background:var(--bg);padding:20px;}
 .auth-card{background:var(--card);border:1px solid var(--border);border-radius:12px;
   padding:28px;max-width:380px;width:100%;}
-.auth-card h2{margin:4px 0 4px;font-size:19px;text-align:center;}
+.auth-card h2{margin:4px 0 4px;font-size:19px;}
 .auth-card label{display:block;font-size:12px;color:var(--muted);margin:14px 0 4px;font-weight:600;}
 .auth-card input{width:100%;border:1px solid var(--border);border-radius:7px;padding:10px 12px;
   font-size:14px;font-family:inherit;}
@@ -469,6 +2312,13 @@ a{text-decoration:none;color:inherit;}
 .layout{display:flex;min-height:calc(100vh - 56px);}
 .sidebar{width:230px;background:#fff;border-right:1px solid var(--border);padding:14px 0;
   flex-shrink:0;display:flex;flex-direction:column;}
+.active-project-panel{margin-top:auto;padding:14px 16px;border-top:1px solid var(--border);
+  background:#F8FAFC;}
+.active-project-label{font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;
+  margin-bottom:4px;}
+.active-project-name{font-size:13px;font-weight:700;color:var(--text);margin-bottom:3px;}
+.active-project-updated{font-size:11px;color:var(--muted);margin-bottom:5px;}
+.active-project-status{font-size:11px;color:var(--green);font-weight:600;}
 .sidebar-label{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;
   padding:14px 18px 6px;}
 .sidebar-btn{display:flex;align-items:center;gap:11px;padding:11px 18px;margin:2px 10px;
@@ -477,27 +2327,56 @@ a{text-decoration:none;color:inherit;}
 .sidebar-btn:hover{background:#F0F4F9;}
 .sidebar-btn.active{background:var(--dark);color:#fff;font-weight:700;}
 .sidebar-btn.active svg{color:#fff;}
+.sidebar-btn.primary{background:var(--orange);color:#fff;margin:4px 12px;border-radius:8px;
+  text-align:center;font-weight:700;justify-content:center;}
+.sidebar-btn.primary:hover{background:#d96e00;}
+.sidebar-btn.primary svg{color:#fff;}
 
 .content{flex:1;padding:20px;min-width:0;overflow-x:hidden;display:flex;flex-direction:column;min-height:calc(100vh - 56px);}
 .app-footer{margin-top:auto;padding-top:24px;text-align:center;font-size:11px;color:var(--muted);}
 
-.page-title{margin:0 0 16px;font-size:20px;font-weight:700;color:var(--blue);}
+.page-title{margin:0 0 16px;font-size:20px;font-weight:700;}
 .muted{color:var(--muted);font-size:12px;}
+.muted-note{color:var(--muted);font-size:12px;margin:6px 0 14px;}
+.error-note{color:var(--red);font-size:12px;font-weight:600;}
 
-.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:20px;}
+.kpi-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;}
+.kpi-row-5{grid-template-columns:repeat(auto-fit,minmax(110px,1fr));}
+.kpi-row-6{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));}
 .kpi-card{background:var(--card);border:1px solid var(--border);border-radius:10px;
-  padding:14px;text-align:center;}
-.kpi-value{font-size:22px;font-weight:700;color:var(--blue);}
-.kpi-value.alert{color:var(--red);}
+  padding:12px;text-align:center;}
+.kpi-value{font-size:22px;font-weight:700;}
 .kpi-label{font-size:11px;color:var(--muted);margin-top:2px;}
+.kpi-icon-card{display:flex;align-items:center;gap:10px;text-align:left;padding:14px;}
+.kpi-icon-circle{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:16px;flex-shrink:0;}
+.kpi-icon-body{min-width:0;}
+.kpi-icon-body .kpi-value{font-size:19px;}
+.kpi-icon-body .kpi-label{font-size:11px;font-weight:600;color:var(--text);margin:1px 0;}
+.kpi-sublabel{font-size:10px;color:var(--muted);}
 
-.filters-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:flex-end;}
-.filters-bar > div{min-width:150px;}
-.filters-bar input, .filters-bar select{border:1px solid var(--border);border-radius:7px;padding:8px 10px;
-  font-size:13px;font-family:inherit;background:#fff;width:100%;}
-.filters-bar label{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:4px;text-transform:uppercase;}
+.page-tabs{display:flex;gap:4px;border-bottom:2px solid var(--border);margin-bottom:16px;flex-wrap:wrap;}
+.page-tab{background:none;border:none;padding:10px 16px;font-size:13px;font-weight:600;
+  color:var(--muted);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px;}
+.page-tab.active{color:var(--blue);border-bottom-color:var(--blue);}
+.tab-panel{display:none;}
+.tab-panel.active{display:block;}
 
-.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:18px;}
+.filters-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;}
+.filters-bar input[type=text]{flex:1;min-width:200px;border:1px solid var(--border);border-radius:7px;
+  padding:8px 12px;font-size:13px;font-family:inherit;}
+.filters-bar select{border:1px solid var(--border);border-radius:7px;padding:8px 10px;
+  font-size:12px;font-family:inherit;background:#fff;}
+
+.bulk-actions-bar{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap;}
+.bulk-actions-bar button:disabled{opacity:0.45;cursor:not-allowed;}
+
+.project-grid{display:grid;grid-template-columns:1fr;gap:12px;}
+.project-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;}
+.project-card h3{margin:6px 0 2px;font-size:15px;}
+.area-badge{display:inline-block;color:#fff;font-size:10px;font-weight:700;
+  padding:3px 9px;border-radius:6px;}
+.card-actions{display:flex;gap:8px;margin-top:10px;}
 
 .btn-primary{background:var(--blue);color:#fff;border:none;border-radius:7px;
   padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;display:inline-block;}
@@ -510,15 +2389,29 @@ a{text-decoration:none;color:inherit;}
   border:none;cursor:pointer;display:inline-block;}
 .btn-mini-danger{background:var(--red);}
 
-.table-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--border);border-radius:10px;}
-.data-table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:640px;}
-.data-table th{background:var(--blue);color:#fff;text-align:left;padding:9px 10px;
+.photo-source-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:6px;}
+.photo-source-card{display:flex;align-items:center;gap:10px;padding:13px;border:1px solid var(--border);
+  border-radius:10px;background:#f8fafc;cursor:pointer;transition:.15s ease;}
+.photo-source-card:hover{border-color:var(--blue);background:#f1f6fb;}
+.photo-source-card span{display:flex;flex-direction:column;gap:2px;}
+.photo-source-card strong{font-size:13px;color:var(--dark);}
+.photo-source-card small{font-size:11px;color:var(--muted);font-weight:400;}
+.photo-source-card .photo-source-icon{font-size:24px;display:block;}
+.photo-source-card input[type="file"]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;}
+@media(max-width:640px){.photo-source-grid{grid-template-columns:1fr;}}
+
+.table-toolbar{display:flex;justify-content:space-between;align-items:center;
+  flex-wrap:wrap;gap:8px;margin-bottom:6px;}
+.table-toolbar h2{margin:0;font-size:17px;}
+
+.table-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--border);
+  border-radius:10px;}
+.data-table{width:100%;border-collapse:collapse;font-size:12px;min-width:640px;}
+.data-table th{background:var(--blue);color:#fff;text-align:left;padding:8px 10px;
   font-size:11px;white-space:nowrap;}
-.data-table td{padding:9px 10px;border-bottom:1px solid var(--border);}
-.data-table tr:hover td{background:#F8FAFC;}
+.data-table td{padding:8px 10px;border-bottom:1px solid var(--border);}
 .actions-cell{white-space:nowrap;}
 .actions-cell .btn-mini{margin-right:4px;}
-.row-alert td{background:#FCEBEB;}
 
 .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;}
 .pill-blue{background:#E6F1FB;color:var(--blue);}
@@ -527,993 +2420,952 @@ a{text-decoration:none;color:inherit;}
 .pill-red{background:#FCEBEB;color:var(--red);}
 
 .form-card{background:var(--card);border:1px solid var(--border);border-radius:12px;
-  padding:20px;max-width:700px;}
+  padding:20px;max-width:560px;}
+.form-card h2{margin:0 0 14px;font-size:17px;}
 .form-card label{display:block;font-size:12px;color:var(--muted);margin:12px 0 4px;font-weight:600;}
 .form-card input, .form-card select, .form-card textarea{
   width:100%;border:1px solid var(--border);border-radius:7px;padding:9px 10px;font-size:13px;
   font-family:inherit;background:#fff;color:var(--text);
 }
-.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;}
+.form-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+.form-row-2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
 .form-actions{display:flex;gap:10px;margin-top:20px;}
+.form-card-wide{max-width:760px;}
+.form-section-label{font-size:11px;font-weight:700;color:var(--blue);text-transform:uppercase;
+  letter-spacing:0.4px;margin:22px 0 4px;padding-top:14px;border-top:1px solid var(--border);}
+.form-section-label:first-of-type{border-top:none;padding-top:0;margin-top:6px;}
 
-.flash{padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;}
-.flash-error{background:#FCEBEB;color:var(--red);border:1px solid #F5C2BC;}
-.flash-success{background:#EAF3DE;color:#4c7a17;border:1px solid #bfe8cc;}
+.checklist-row{display:flex;align-items:center;gap:10px;padding:8px 0;
+  border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.checklist-fase{font-size:11px;font-weight:700;width:90px;flex-shrink:0;}
+.checklist-question{flex:1;font-size:13px;min-width:160px;}
+.checklist-btns{display:flex;gap:6px;flex-shrink:0;}
+.chk-btn{display:flex;align-items:center;gap:4px;font-size:12px;font-weight:700;
+  padding:6px 10px;border-radius:6px;cursor:pointer;border:1px solid var(--border);}
+.chk-btn input{margin:0;width:auto;}
+.chk-si{color:var(--green);}
+.chk-si:has(input:checked), .chk-si.chk-selected{background:var(--green);color:#fff;border-color:var(--green);}
+.chk-no{color:var(--red);}
+.chk-no:has(input:checked), .chk-no.chk-selected{background:var(--red);color:#fff;border-color:var(--red);}
 
-.hub-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;}
-.module-card{
-  background:var(--card);border:1px solid var(--border);border-radius:12px;padding:22px;
-  text-align:left;transition:transform .15s, box-shadow .15s;
+.fase-btns{display:flex;gap:6px;flex-wrap:wrap;}
+.fase-btn{display:flex;align-items:center;gap:0;font-size:12px;font-weight:700;
+  padding:8px 12px;border-radius:6px;cursor:pointer;border:2px solid var(--fase-color);
+  color:var(--fase-color);background:#fff;}
+.fase-btn input{position:absolute;opacity:0;width:0;height:0;}
+.fase-btn:has(input:checked), .fase-btn.fase-selected{background:var(--fase-color);color:#fff;}
+
+.gantt-table{min-width:100%;}
+.gantt-table th{text-align:center;min-width:44px;}
+.gantt-table td{text-align:center;padding:6px 4px;}
+.gantt-row-label{text-align:left !important;font-size:12px;padding-left:10px !important;white-space:normal;}
+.gantt-current{background:#EAF1FA;}
+.gantt-h{display:inline-block;width:22px;height:22px;line-height:22px;border-radius:5px;
+  font-size:11px;font-weight:700;color:#fff;}
+.gantt-h-abierto{background:var(--red);}
+.gantt-h-cerrado{background:var(--green);}
+.gantt-legend{display:flex;gap:18px;margin-top:12px;font-size:12px;color:var(--muted);align-items:center;}
+.gantt-legend span{display:flex;align-items:center;gap:6px;}
+.gantt-current-swatch{display:inline-block;width:14px;height:14px;border-radius:3px;background:#EAF1FA;
+  border:1px solid var(--blue);}
+.btn-icon-text{border:1px solid var(--border);background:#fff;border-radius:6px;padding:6px 12px;
+  font-size:12px;cursor:pointer;color:var(--text);}
+
+.two-col{display:grid;grid-template-columns:1fr;gap:14px;}
+.three-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px;}
+.chart-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;}
+.chart-card h3{margin:0 0 12px;font-size:13px;color:var(--blue);text-transform:uppercase;font-weight:700;}
+
+.progress-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;}
+.progress-label{width:110px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.progress-track{flex:1;height:10px;background:var(--border);border-radius:6px;overflow:hidden;}
+.progress-fill{height:100%;border-radius:6px;}
+.progress-value{width:34px;text-align:right;font-weight:700;flex-shrink:0;}
+
+.info-table{width:100%;font-size:13px;border-collapse:collapse;}
+.info-table td{padding:6px 4px;vertical-align:top;border-bottom:1px solid var(--border);}
+.info-table td:first-child{width:40%;}
+
+.project-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+.project-name{font-weight:700;font-size:16px;color:var(--blue);}
+
+.vsm-map-scroll{display:flex;overflow-x:auto;gap:0;padding:8px 0;align-items:center;}
+.vsm-proc-box{background:#F0F5FB;border:2px solid var(--blue);border-radius:8px;
+  padding:10px 14px;min-width:150px;flex-shrink:0;font-size:12px;}
+.vsm-proc-box strong{color:var(--blue);font-size:13px;}
+.vsm-proc-line{font-size:11.5px;color:var(--text);margin-top:3px;font-weight:600;}
+.vsm-arrow{padding:0 8px;color:var(--muted);font-size:16px;flex-shrink:0;}
+.vsm-arrow-group{color:var(--orange);font-weight:700;font-size:20px;}
+
+.timeline-bar{flex:1;border-radius:6px;padding:8px 14px;font-size:13px;font-weight:700;border:1px solid;}
+.timeline-bar-va{background:#EAF3DE;border-color:var(--green);color:#3b6d11;}
+.timeline-bar-nva{background:#FCEBEB;border-color:var(--red);color:var(--red);}
+.timeline-bar-ct{background:#E6F1FB;border-color:var(--blue);color:var(--blue);}
+.timeline-bar-wt{background:#FFF3E0;border-color:var(--orange);color:#b5610a;}
+
+.evidence-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;}
+.evidence-card{background:var(--card);border:1px solid var(--border);border-radius:10px;
+  padding:8px;text-align:center;}
+.evidence-thumb{width:100%;height:120px;object-fit:cover;border-radius:6px;display:block;}
+.evidence-caption{font-size:12px;margin-top:6px;color:var(--text);word-break:break-word;}
+.evidence-date{font-size:10px;color:var(--muted);margin-bottom:6px;}
+
+/* ── Mobile: sidebar se convierte en barra horizontal scrollable ── */
+@media (max-width: 760px){
+  .layout{flex-direction:column;}
+  .sidebar{
+    width:100%;display:flex;flex-direction:row;overflow-x:auto;white-space:nowrap;
+    padding:8px 6px;border-right:none;border-bottom:1px solid var(--border);
+    -webkit-overflow-scrolling:touch;
+  }
+  .sidebar-label{display:none;}
+  .active-project-panel{display:none;}
+  .sidebar-btn{flex-shrink:0;padding:8px 14px;border-radius:20px;margin-right:6px;
+    border:1px solid var(--border);}
+  .sidebar-btn.active{border-color:transparent;}
+  .sidebar-btn.primary{margin:0 6px 0 0;}
+  .content{padding:14px;}
+  .kpi-row{grid-template-columns:repeat(2,1fr);}
+  .form-row, .form-row-2, .form-row-3{grid-template-columns:1fr;}
+  .two-col{grid-template-columns:1fr;}
+  .app-name{display:none;}
+  .project-switch{margin-left:0;}
+  .project-switch-btn{padding:5px 8px;font-size:11px;}
 }
-.module-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(20,78,140,.12);}
-.module-card.disabled{opacity:.55;cursor:not-allowed;}
-.module-card h3{margin:10px 0 4px;font-size:15px;color:var(--blue);}
-.module-card p{margin:0;font-size:12.5px;color:var(--muted);}
-.module-card svg{color:var(--blue);}
-</style>
-</head>
-<body>
 """
 
-def _icon(name):
-    icons = {
-        "home": '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>',
-        "vas": '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>',
-        "inv": '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="14" rx="1"/><path d="M8 7V4h8v3"/><path d="M3 11h18"/></svg>',
-        "quality": '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>',
-        "users": '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-        "scan": '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>',
-    }
-    return icons.get(name, "")
 
-NAV = """
-<div class="topbar">
-  <div class="topbar-left">
-    <img src="/logo.png" alt="Nefab" class="brand-logo">
-    <span class="app-name">Nefab Operaciones<small>Control de operaciones</small></span>
-  </div>
-  <div class="topbar-right">
-    {% if session.get('user_id') %}
-    <span class="user-email">{{ session.get('username') }}{% if session.get('role') == 'admin' %} <span class="role-badge">ADMIN</span>{% endif %}</span>
-    <a href="{{ url_for('logout') }}" class="btn-secondary" style="padding:6px 12px;">Salir</a>
-    {% endif %}
-  </div>
-</div>
-<div class="layout">
-  <nav class="sidebar">
-    <a href="{{ url_for('hub') }}" class="sidebar-btn {{ 'active' if active=='hub' else '' }}">""" + _icon("home") + """ Inicio</a>
-    {% if session.get('user_id') %}
-    <div class="sidebar-label">Módulos</div>
-    <a href="{{ url_for('vas_list') }}" class="sidebar-btn {{ 'active' if active=='vas' else '' }}">""" + _icon("vas") + """ VAS</a>
-    <a href="{{ url_for('inv_dashboard') }}" class="sidebar-btn {{ 'active' if active=='inv' else '' }}">""" + _icon("inv") + """ Inventario</a>
-    <a href="{{ url_for('calidad_list') }}" class="sidebar-btn {{ 'active' if active=='calidad' else '' }}">""" + _icon("quality") + """ Calidad</a>
-    {% if session.get('role') == 'admin' %}
-    <div class="sidebar-label">Administración</div>
-    <a href="{{ url_for('admin_users') }}" class="sidebar-btn {{ 'active' if active=='users' else '' }}">""" + _icon("users") + """ Usuarios</a>
-    {% endif %}
-    {% endif %}
-  </nav>
-  <main class="content">
-"""
-
-FOOTER = """
-    <footer class="app-footer">&copy; 2026 Nefab Group &middot; Operations Hub</footer>
-  </main>
-</div>
-</body></html>
-"""
-
-LOGIN_TEMPLATE = BASE_HEAD + """
-<div class="auth-page">
-  <div class="auth-card">
-    <div style="text-align:center;margin-bottom:12px;"><img src="/logo.png" style="height:34px;"></div>
-    <h2>Nefab Operaciones</h2>
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for cat, msg in messages %}
-        <div class="flash flash-{{ 'error' if cat=='error' else 'success' }}">{{ msg }}</div>
-      {% endfor %}
-    {% endwith %}
-    <form method="post">
-      <label>Usuario</label>
-      <input type="text" name="username" required autofocus>
-      <label>Contraseña</label>
-      <input type="password" name="password" required>
-      <div style="margin-top:18px;">
-        <button class="btn-primary" style="width:100%;" type="submit">Ingresar</button>
-      </div>
-    </form>
-  </div>
-</div>
-</body></html>
-"""
-
-HUB_TEMPLATE = BASE_HEAD + NAV + """
-  <h1 class="page-title">Bienvenido, {{ session.get('username') }}</h1>
-  <p class="muted" style="margin-bottom:18px;">Selecciona un módulo para comenzar.</p>
-  <div class="hub-grid">
-    <a class="module-card" href="{{ url_for('vas_list') }}">
-      """ + _icon("vas") + """
-      <h3>VAS</h3>
-      <p>Control de Value Added Services</p>
-    </a>
-    <a class="module-card" href="{{ url_for('inv_dashboard') }}">
-      """ + _icon("inv") + """
-      <h3>Inventario de Materiales</h3>
-      <p>Kardex, stock y trazabilidad</p>
-    </a>
-    <a class="module-card" href="{{ url_for('calidad_list') }}">
-      """ + _icon("quality") + """
-      <h3>Registro de Calidad</h3>
-      <p>Retornos, reclamos, tickets y diferencias de stock</p>
-    </a>
-  </div>
-""" + FOOTER
-
-VAS_LIST_TEMPLATE = BASE_HEAD + NAV + """
-  <h1 class="page-title">Control de VAS</h1>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-      <div class="flash flash-{{ 'error' if cat=='error' else 'success' }}">{{ msg }}</div>
-    {% endfor %}
-  {% endwith %}
-
-  <div class="kpi-row">
-    <div class="kpi-card"><div class="kpi-value">{{ kpi.total_horas }}</div><div class="kpi-label">Horas totales (filtro)</div></div>
-    <div class="kpi-card"><div class="kpi-value">{{ kpi.total_registros }}</div><div class="kpi-label">Registros</div></div>
-    <div class="kpi-card"><div class="kpi-value">{{ kpi.top_area }}</div><div class="kpi-label">Área con más horas</div></div>
-    <div class="kpi-card"><div class="kpi-value">{{ kpi.top_tarea }}</div><div class="kpi-label">Tarea más frecuente</div></div>
-  </div>
-
-  <div class="card">
-    <canvas id="chartArea" height="90"></canvas>
-  </div>
-
-  <div class="card">
-    <form method="get" class="filters-bar">
-      <div>
-        <label>Mes</label>
-        <input type="month" name="mes" value="{{ filtros.mes or '' }}">
-      </div>
-      <div>
-        <label>Área</label>
-        <select name="area">
-          <option value="">Todas</option>
-          {% for a in areas %}
-          <option value="{{ a }}" {{ 'selected' if filtros.area==a else '' }}>{{ a }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label>Tarea</label>
-        <select name="tarea">
-          <option value="">Todas</option>
-          {% for t in tareas %}
-          <option value="{{ t }}" {{ 'selected' if filtros.tarea==t else '' }}>{{ t }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div><button class="btn-secondary" type="submit">Filtrar</button></div>
-      <div><a class="btn-secondary" href="{{ url_for('vas_export', **filtros) }}">Exportar Excel</a></div>
-      <div><a class="btn-primary" href="{{ url_for('vas_new') }}">Nuevo registro</a></div>
-    </form>
-  </div>
-
-  <div class="table-wrap">
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Fecha</th><th>Delivery</th><th>Área</th><th>Nombre</th><th>WC/BC</th>
-          <th>Horas</th><th>Tarea</th><th>Observaciones</th><th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in registros %}
-        <tr>
-          <td>{{ r.fecha }}</td>
-          <td>{{ r.delivery or '-' }}</td>
-          <td>{{ r.area }}</td>
-          <td>{{ r.nombre }}</td>
-          <td>{{ r.wc_bc }}</td>
-          <td>{{ '%.2f'|format(r.horas) }}</td>
-          <td>{{ r.tarea }}</td>
-          <td>{{ r.observaciones or '' }}</td>
-          <td class="actions-cell">
-            <a class="btn-mini" href="{{ url_for('vas_edit', record_id=r.id) }}">Editar</a>
-            <form method="post" action="{{ url_for('vas_delete', record_id=r.id) }}" style="display:inline;"
-                  onsubmit="return confirm('¿Eliminar este registro?');">
-              <button class="btn-mini btn-mini-danger" type="submit">Eliminar</button>
-            </form>
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="9" style="text-align:center;color:var(--muted);">Sin registros para este filtro.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-<script>
-  const ctx = document.getElementById('chartArea');
-  new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: {{ chart_labels|tojson }},
-      datasets: [{
-        label: 'Horas por Área',
-        data: {{ chart_data|tojson }},
-        backgroundColor: '#144E8C'
-      }]
-    },
-    options: { responsive:true, plugins:{legend:{display:false}} }
-  });
-</script>
-""" + FOOTER
-
-VAS_FORM_TEMPLATE = BASE_HEAD + NAV + """
-  <h1 class="page-title">{{ 'Editar registro' if record else 'Nuevo registro VAS' }}</h1>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-      <div class="flash flash-{{ 'error' if cat=='error' else 'success' }}">{{ msg }}</div>
-    {% endfor %}
-  {% endwith %}
-  <div class="form-card">
-    <form method="post">
-      <div class="form-grid">
-        <div>
-          <label>Fecha *</label>
-          <input type="date" name="fecha" value="{{ record.fecha if record else today }}" required>
-        </div>
-        <div>
-          <label>Delivery</label>
-          <input type="text" name="delivery" value="{{ record.delivery if record else '' }}">
-        </div>
-        <div>
-          <label>Área *</label>
-          <select name="area" required>
-            {% for a in areas %}
-            <option value="{{ a }}" {{ 'selected' if record and record.area==a else '' }}>{{ a }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label>Nombre *</label>
-          <input type="text" name="nombre" value="{{ record.nombre if record else '' }}" required>
-        </div>
-        <div>
-          <label>WC / BC *</label>
-          <select name="wc_bc" required>
-            {% for w in wc_bc %}
-            <option value="{{ w }}" {{ 'selected' if record and record.wc_bc==w else '' }}>{{ w }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label>Horas *</label>
-          <input type="number" step="0.1" min="0" name="horas" value="{{ record.horas if record else '' }}" required>
-        </div>
-        <div>
-          <label>Tarea *</label>
-          <select name="tarea" required>
-            {% for t in tareas %}
-            <option value="{{ t }}" {{ 'selected' if record and record.tarea==t else '' }}>{{ t }}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
-      <label>Observaciones</label>
-      <textarea name="observaciones" rows="3">{{ record.observaciones if record else '' }}</textarea>
-      <div class="form-actions">
-        <button class="btn-primary" type="submit">Guardar</button>
-        <a class="btn-secondary" href="{{ url_for('vas_list') }}">Cancelar</a>
-      </div>
-    </form>
-  </div>
-""" + FOOTER
-
-INV_DASHBOARD_TEMPLATE = BASE_HEAD + NAV + """
-  <h1 class="page-title">Inventario de Materiales</h1>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-      <div class="flash flash-{{ 'error' if cat=='error' else 'success' }}">{{ msg }}</div>
-    {% endfor %}
-  {% endwith %}
-
-  <div class="kpi-row">
-    <div class="kpi-card"><div class="kpi-value">{{ kpi.total_materiales }}</div><div class="kpi-label">Materiales activos</div></div>
-    <div class="kpi-card"><div class="kpi-value alert">{{ kpi.bajo_minimo }}</div><div class="kpi-label">Bajo stock mínimo</div></div>
-    <div class="kpi-card"><div class="kpi-value">{{ kpi.movs_mes }}</div><div class="kpi-label">Movimientos este mes</div></div>
-  </div>
-
-  <div class="card">
-    <div class="filters-bar" style="align-items:center;">
-      <a class="btn-primary" href="{{ url_for('inv_material_new') }}">Nuevo material</a>
-      <a class="btn-primary" href="{{ url_for('inv_mov_new') }}">Registrar movimiento</a>
-      <a class="btn-secondary" href="{{ url_for('inv_kardex') }}">Trazabilidad por lote/OT</a>
-      <a class="btn-secondary" href="{{ url_for('inv_export') }}">Exportar stock a Excel</a>
-    </div>
-  </div>
-
-  <div class="table-toolbar" style="margin-bottom:6px;"><h2 style="font-size:15px;color:var(--blue);">Stock actual</h2></div>
-  <div class="table-wrap">
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Código</th><th>Nombre</th><th>Categoría</th><th>Unidad</th>
-          <th>Stock actual</th><th>Stock mínimo</th><th>Estado</th><th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for m in materiales %}
-        <tr class="{{ 'row-alert' if m.stock_actual < m.stock_minimo else '' }}">
-          <td>{{ m.codigo }}</td>
-          <td>{{ m.nombre }}</td>
-          <td>{{ m.categoria }}</td>
-          <td>{{ m.unidad }}</td>
-          <td>{{ '%.2f'|format(m.stock_actual) }}</td>
-          <td>{{ '%.2f'|format(m.stock_minimo) }}</td>
-          <td>
-            {% if m.stock_actual < m.stock_minimo %}
-              <span class="pill pill-red">Bajo mínimo</span>
-            {% else %}
-              <span class="pill pill-green">OK</span>
-            {% endif %}
-          </td>
-          <td class="actions-cell">
-            <a class="btn-mini" href="{{ url_for('inv_kardex', material_id=m.id) }}">Ver kardex</a>
-            <a class="btn-mini" href="{{ url_for('inv_material_edit', material_id=m.id) }}">Editar</a>
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="8" style="text-align:center;color:var(--muted);">Aún no hay materiales cargados.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-""" + FOOTER
-
-INV_MATERIAL_FORM_TEMPLATE = BASE_HEAD + NAV + """
-  <h1 class="page-title">{{ 'Editar material' if material else 'Nuevo material' }}</h1>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-      <div class="flash flash-{{ 'error' if cat=='error' else 'success' }}">{{ msg }}</div>
-    {% endfor %}
-  {% endwith %}
-  <div class="form-card">
-    <form method="post">
-      <div class="form-grid">
-        <div>
-          <label>Código *</label>
-          <input type="text" name="codigo" value="{{ material.codigo if material else '' }}" required>
-        </div>
-        <div>
-          <label>Nombre *</label>
-          <input type="text" name="nombre" value="{{ material.nombre if material else '' }}" required>
-        </div>
-        <div>
-          <label>Categoría *</label>
-          <select name="categoria" required>
-            {% for c in categorias %}
-            <option value="{{ c }}" {{ 'selected' if material and material.categoria==c else '' }}>{{ c }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label>Unidad de medida *</label>
-          <select name="unidad" required>
-            {% for u in unidades %}
-            <option value="{{ u }}" {{ 'selected' if material and material.unidad==u else '' }}>{{ u }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label>Stock mínimo *</label>
-          <input type="number" step="0.01" min="0" name="stock_minimo"
-                 value="{{ material.stock_minimo if material else '0' }}" required>
-        </div>
-      </div>
-      <div class="form-actions">
-        <button class="btn-primary" type="submit">Guardar</button>
-        <a class="btn-secondary" href="{{ url_for('inv_dashboard') }}">Cancelar</a>
-      </div>
-    </form>
-  </div>
-""" + FOOTER
-
-INV_MOV_FORM_TEMPLATE = BASE_HEAD + NAV + """
-  <h1 class="page-title">Registrar movimiento de inventario</h1>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-      <div class="flash flash-{{ 'error' if cat=='error' else 'success' }}">{{ msg }}</div>
-    {% endfor %}
-  {% endwith %}
-  <div class="form-card">
-    <form method="post">
-      <div class="form-grid">
-        <div>
-          <label>Material *</label>
-          <select name="material_id" required>
-            <option value="">Selecciona...</option>
-            {% for m in materiales %}
-            <option value="{{ m.id }}">{{ m.codigo }} - {{ m.nombre }} ({{ m.unidad }})</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label>Tipo *</label>
-          <select name="tipo" required>
-            {% for t in tipos %}
-            <option value="{{ t }}">{{ t }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label>Cantidad *</label>
-          <input type="number" step="0.01" min="0.01" name="cantidad" required>
-        </div>
-        <div>
-          <label>Fecha *</label>
-          <input type="date" name="fecha" value="{{ today }}" required>
-        </div>
-        <div>
-          <label>Delivery</label>
-          <div style="display:flex;gap:6px;">
-            <input type="text" id="delivery-input" name="delivery" placeholder="Ej: 802522080">
-            <button type="button" class="btn-secondary" style="white-space:nowrap;" onclick="abrirEscaner('delivery-input')">""" + _icon("scan") + """ Escanear</button>
-          </div>
-        </div>
-        <div>
-          <label>Lote / OT</label>
-          <div style="display:flex;gap:6px;">
-            <input type="text" id="lote-input" name="lote_ot" placeholder="Ej: OT-2026-0451">
-            <button type="button" class="btn-secondary" style="white-space:nowrap;" onclick="abrirEscaner('lote-input')">""" + _icon("scan") + """ Escanear</button>
-          </div>
-        </div>
-        <div>
-          <label>Responsable</label>
-          <input type="text" name="responsable">
-        </div>
-      </div>
-      <label>Observaciones</label>
-      <textarea name="observaciones" rows="3"></textarea>
-      <div class="form-actions">
-        <button class="btn-primary" type="submit">Guardar movimiento</button>
-        <a class="btn-secondary" href="{{ url_for('inv_dashboard') }}">Cancelar</a>
-      </div>
-    </form>
-  </div>
-
-  <div id="scan-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center;">
-    <div style="background:#fff;border-radius:12px;padding:18px;width:min(420px,92vw);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <strong style="color:var(--blue);font-size:14px;">Escanear código de barras / QR</strong>
-        <button type="button" class="btn-secondary" style="padding:4px 10px;" onclick="cerrarEscaner()">Cerrar</button>
-      </div>
-      <div id="reader" style="width:100%;"></div>
-      <p class="muted" style="margin-top:8px;">Apunta la cámara al código del Delivery o del bulto.</p>
-    </div>
-  </div>
-  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <script>
-    let html5QrCode = null;
-    let currentTargetInput = null;
-
-    function abrirEscaner(inputId) {
-      currentTargetInput = document.getElementById(inputId);
-      document.getElementById('scan-modal').style.display = 'flex';
-      html5QrCode = new Html5Qrcode("reader");
-      html5QrCode.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 250, height: 120 } },
-        (decodedText) => {
-          if (currentTargetInput) { currentTargetInput.value = decodedText; }
-          cerrarEscaner();
-        },
-        () => {}
-      ).catch(() => {
-        alert('No se pudo acceder a la cámara. Verifica los permisos del navegador.');
-        cerrarEscaner();
-      });
-    }
-
-    function cerrarEscaner() {
-      document.getElementById('scan-modal').style.display = 'none';
-      if (html5QrCode) {
-        html5QrCode.stop().then(() => html5QrCode.clear()).catch(() => {});
-      }
-    }
-  </script>
-""" + FOOTER
-
-INV_KARDEX_TEMPLATE = BASE_HEAD + NAV + """
-  <h1 class="page-title">Trazabilidad / Kardex</h1>
-  <div class="card">
-    <form method="get" class="filters-bar">
-      <div>
-        <label>Material</label>
-        <select name="material_id">
-          <option value="">Todos</option>
-          {% for m in materiales %}
-          <option value="{{ m.id }}" {{ 'selected' if filtros.material_id==m.id|string else '' }}>{{ m.codigo }} - {{ m.nombre }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label>Delivery</label>
-        <input type="text" name="delivery" value="{{ filtros.delivery or '' }}" placeholder="Ej: 802522080">
-      </div>
-      <div>
-        <label>Lote / OT</label>
-        <input type="text" name="lote_ot" value="{{ filtros.lote_ot or '' }}" placeholder="Ej: OT-2026-0451">
-      </div>
-      <div><button class="btn-secondary" type="submit">Buscar</button></div>
-    </form>
-  </div>
-
-  <div class="table-wrap">
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Fecha</th><th>Material</th><th>Tipo</th><th>Cantidad</th>
-          <th>Delivery</th><th>Lote/OT</th><th>Responsable</th><th>Observaciones</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in movimientos %}
-        <tr>
-          <td>{{ r.fecha }}</td>
-          <td>{{ r.codigo }} - {{ r.nombre }}</td>
-          <td>
-            {% if r.tipo == 'Entrada' %}
-              <span class="pill pill-green">Entrada</span>
-            {% else %}
-              <span class="pill pill-orange">Salida</span>
-            {% endif %}
-          </td>
-          <td>{{ '%.2f'|format(r.cantidad) }}</td>
-          <td>{{ r.delivery or '-' }}</td>
-          <td>{{ r.lote_ot or '-' }}</td>
-          <td>{{ r.responsable or '-' }}</td>
-          <td>{{ r.observaciones or '' }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="8" style="text-align:center;color:var(--muted);">Sin movimientos para este filtro.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-""" + FOOTER
-
-CALIDAD_LIST_TEMPLATE = BASE_HEAD + NAV + """
-  <h1 class="page-title">Registro de Calidad</h1>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-      <div class="flash flash-{{ 'error' if cat=='error' else 'success' }}">{{ msg }}</div>
-    {% endfor %}
-  {% endwith %}
-
-  <div class="kpi-row">
-    <div class="kpi-card"><div class="kpi-value">{{ kpi.total }}</div><div class="kpi-label">Registros (filtro)</div></div>
-    <div class="kpi-card"><div class="kpi-value alert">{{ kpi.pendientes }}</div><div class="kpi-label">Pendientes / En proceso</div></div>
-    <div class="kpi-card"><div class="kpi-value">{{ kpi.cerrados }}</div><div class="kpi-label">Cerrados / Aprobados</div></div>
-    <div class="kpi-card"><div class="kpi-value">{{ kpi.top_tipo }}</div><div class="kpi-label">Tipo más frecuente</div></div>
-  </div>
-
-  <div class="card">
-    <canvas id="chartTipo" height="90"></canvas>
-  </div>
-
-  <div class="card">
-    <form method="get" class="filters-bar">
-      <div>
-        <label>Tipo</label>
-        <select name="tipo">
-          <option value="">Todos</option>
-          {% for t in tipos %}
-          <option value="{{ t }}" {{ 'selected' if filtros.tipo==t else '' }}>{{ t }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label>Estado</label>
-        <select name="estado">
-          <option value="">Todos</option>
-          {% for e in estados %}
-          <option value="{{ e }}" {{ 'selected' if filtros.estado==e else '' }}>{{ e }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label>Cliente</label>
-        <input type="text" name="cliente" value="{{ filtros.cliente or '' }}" placeholder="Ej: Collahuasi">
-      </div>
-      <div>
-        <label>Delivery / Guía / RDEL</label>
-        <input type="text" name="buscar" value="{{ filtros.buscar or '' }}" placeholder="Delivery, guía o RDEL">
-      </div>
-      <div><button class="btn-secondary" type="submit">Filtrar</button></div>
-      <div><a class="btn-secondary" href="{{ url_for('calidad_export', **filtros) }}">Exportar Excel</a></div>
-      <div><a class="btn-primary" href="{{ url_for('calidad_new') }}">Nuevo registro</a></div>
-    </form>
-  </div>
-
-  <div class="table-wrap">
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th>Fecha</th><th>Tipo</th><th>Delivery</th><th>RDEL</th><th>Cliente</th><th>Ítem</th>
-          <th>Cantidad</th><th>Motivo</th><th>Responsable</th><th>Estado</th><th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in registros %}
-        <tr>
-          <td>{{ r.fecha }}</td>
-          <td><span class="pill pill-blue">{{ r.tipo }}</span></td>
-          <td>{{ r.delivery or '-' }}</td>
-          <td>{{ r.rdel or '-' }}</td>
-          <td>{{ r.cliente or '-' }}</td>
-          <td>{{ r.item or '-' }}</td>
-          <td>{{ r.cantidad if r.cantidad is not none else '-' }}</td>
-          <td>{{ (r.motivo or '')[:60] }}{{ '…' if r.motivo and r.motivo|length > 60 else '' }}</td>
-          <td>{{ r.responsable or '-' }}</td>
-          <td>
-            {% if r.estado in ['Cerrado', 'Aprobado'] %}
-              <span class="pill pill-green">{{ r.estado }}</span>
-            {% elif r.estado == 'Rechazado' %}
-              <span class="pill pill-red">{{ r.estado }}</span>
-            {% elif r.estado == 'Esperando RDEL' %}
-              <span class="pill pill-orange">{{ r.estado }}</span>
-            {% else %}
-              <span class="pill pill-orange">{{ r.estado }}</span>
-            {% endif %}
-          </td>
-          <td class="actions-cell">
-            <a class="btn-mini" href="{{ url_for('calidad_edit', record_id=r.id) }}">Editar</a>
-            <form method="post" action="{{ url_for('calidad_delete', record_id=r.id) }}" style="display:inline;"
-                  onsubmit="return confirm('¿Eliminar este registro?');">
-              <button class="btn-mini btn-mini-danger" type="submit">Eliminar</button>
-            </form>
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="11" style="text-align:center;color:var(--muted);">Sin registros para este filtro.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-<script>
-  const ctxTipo = document.getElementById('chartTipo');
-  new Chart(ctxTipo, {
-    type: 'bar',
-    data: {
-      labels: {{ chart_labels|tojson }},
-      datasets: [{
-        label: 'Registros por Tipo',
-        data: {{ chart_data|tojson }},
-        backgroundColor: '#144E8C'
-      }]
-    },
-    options: { responsive:true, plugins:{legend:{display:false}} }
-  });
-</script>
-""" + FOOTER
-
-CALIDAD_FORM_TEMPLATE = BASE_HEAD + NAV + """
-  <h1 class="page-title">{{ 'Editar registro de Calidad' if record else 'Nuevo registro de Calidad' }}</h1>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-      <div class="flash flash-{{ 'error' if cat=='error' else 'success' }}">{{ msg }}</div>
-    {% endfor %}
-  {% endwith %}
-  <div class="form-card form-card-wide">
-    <form method="post">
-      <div class="form-grid">
-        <div>
-          <label>Tipo *</label>
-          <select name="tipo" id="tipo-select" required onchange="actualizarCamposTipo()">
-            {% for t in tipos %}
-            <option value="{{ t }}" {{ 'selected' if record and record.tipo==t else '' }}>{{ t }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label>Fecha *</label>
-          <input type="date" name="fecha" value="{{ record.fecha if record else today }}" required>
-        </div>
-        <div>
-          <label>Estado *</label>
-          <select name="estado" required>
-            {% for e in estados %}
-            <option value="{{ e }}" {{ 'selected' if record and record.estado==e else '' }}>{{ e }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label>Delivery</label>
-          <div style="display:flex;gap:6px;">
-            <input type="text" id="delivery-input-cal" name="delivery" value="{{ record.delivery if record else '' }}">
-            <button type="button" class="btn-secondary" style="white-space:nowrap;" onclick="abrirEscanerCal('delivery-input-cal')">""" + _icon("scan") + """ Escanear</button>
-          </div>
-        </div>
-        <div>
-          <label>Guía</label>
-          <input type="text" name="guia" value="{{ record.guia if record else '' }}">
-        </div>
-        <div>
-          <label>Cliente</label>
-          <input type="text" name="cliente" value="{{ record.cliente if record else '' }}">
-        </div>
-      </div>
-
-      <div class="form-section-label">Material</div>
-      {% if record %}
-      <div class="form-grid">
-        <div>
-          <label>Ítem / PN</label>
-          <input type="text" name="item" value="{{ record.item if record else '' }}">
-        </div>
-        <div>
-          <label>Descripción material</label>
-          <input type="text" name="descripcion_material" value="{{ record.descripcion_material if record else '' }}">
-        </div>
-        <div>
-          <label>Cantidad</label>
-          <input type="number" step="0.01" name="cantidad" value="{{ record.cantidad if record else '' }}">
-        </div>
-      </div>
-      <p class="muted">Estás editando un registro existente, que corresponde a un solo ítem. Si este caso tiene más ítems, agrégalos como registros nuevos (usando el mismo Delivery/Guía) desde "Nuevo registro".</p>
-      {% else %}
-      <p class="muted" style="margin-top:-4px;">Si el Delivery/Guía trae más de un ítem, agrega una fila por cada uno — se creará un registro por ítem, todos con los mismos datos generales de arriba.</p>
-      <div class="table-wrap" style="margin-bottom:10px;">
-        <table class="data-table" id="items-table">
-          <thead>
-            <tr><th style="width:30%;">Ítem / PN</th><th>Descripción material</th><th style="width:15%;">Cantidad</th><th></th></tr>
-          </thead>
-          <tbody id="items-tbody">
-            <tr>
-              <td><input type="text" name="item[]"></td>
-              <td><input type="text" name="descripcion_material[]"></td>
-              <td><input type="number" step="0.01" name="cantidad[]"></td>
-              <td><button type="button" class="btn-mini btn-mini-danger" onclick="quitarFilaItem(this)">Quitar</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <button type="button" class="btn-secondary" onclick="agregarFilaItem()">+ Agregar ítem</button>
-      {% endif %}
-
-      <div class="form-section-label">Datos adicionales</div>
-      <p class="muted" style="margin-top:-4px;">Ubicación y Peso aplican principalmente a Scrap y Reversa; Proceso es el estado físico del material (ej: "Esperando retiro de scrap"). RDEL es el N° de retorno que asigna el mandante (Metso) para poder ingresar el Delivery retornado a inventario.</p>
-      <div class="form-grid">
-        <div>
-          <label>Ubicación</label>
-          <input type="text" name="ubicacion" value="{{ record.ubicacion if record else '' }}" placeholder="Ej: AO-B-91-005-000">
-        </div>
-        <div>
-          <label>Peso (kg)</label>
-          <input type="number" step="0.01" name="peso_kg" value="{{ record.peso_kg if record else '' }}">
-        </div>
-        <div>
-          <label>Proceso</label>
-          <input type="text" name="proceso" value="{{ record.proceso if record else '' }}" placeholder="Ej: Esperando retiro de scrap">
-        </div>
-        <div>
-          <label>RDEL</label>
-          <input type="text" name="rdel" value="{{ record.rdel if record else '' }}" placeholder="N° asignado por Metso">
-        </div>
-      </div>
-
-      <div class="form-section-label" id="seccion-diferencia-stock" style="display:none;">
-        Diferencia de Stock (solo aplica a este tipo)
-      </div>
-      <div class="form-grid" id="campos-diferencia-stock" style="display:none;">
-        <div>
-          <label>Cantidad sistema</label>
-          <input type="number" step="0.01" name="cantidad_sistema" value="{{ record.cantidad_sistema if record else '' }}">
-        </div>
-        <div>
-          <label>Cantidad física</label>
-          <input type="number" step="0.01" name="cantidad_fisica" value="{{ record.cantidad_fisica if record else '' }}">
-        </div>
-      </div>
-
-      <div class="form-section-label">Análisis</div>
-      <label>Motivo / Descripción del caso</label>
-      <textarea name="motivo" rows="2">{{ record.motivo if record else '' }}</textarea>
-      <label>Causa raíz</label>
-      <textarea name="causa_raiz" rows="2">{{ record.causa_raiz if record else '' }}</textarea>
-      <label>Acciones correctivas</label>
-      <textarea name="acciones_correctivas" rows="2">{{ record.acciones_correctivas if record else '' }}</textarea>
-
-      <div class="form-grid" style="margin-top:10px;">
-        <div>
-          <label>Responsable</label>
-          <input type="text" name="responsable" value="{{ record.responsable if record else '' }}">
-        </div>
-      </div>
-      <label>Observaciones</label>
-      <textarea name="observaciones" rows="2">{{ record.observaciones if record else '' }}</textarea>
-
-      <div class="form-actions">
-        <button class="btn-primary" type="submit">Guardar</button>
-        <a class="btn-secondary" href="{{ url_for('calidad_list') }}">Cancelar</a>
-      </div>
-    </form>
-  </div>
-
-  <div id="scan-modal-cal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center;">
-    <div style="background:#fff;border-radius:12px;padding:18px;width:min(420px,92vw);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <strong style="color:var(--blue);font-size:14px;">Escanear código de barras / QR</strong>
-        <button type="button" class="btn-secondary" style="padding:4px 10px;" onclick="cerrarEscanerCal()">Cerrar</button>
-      </div>
-      <div id="reader-cal" style="width:100%;"></div>
-      <p class="muted" style="margin-top:8px;">Apunta la cámara al código del Delivery o del bulto.</p>
-    </div>
-  </div>
-  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <script>
-    let html5QrCodeCal = null;
-    let currentTargetInputCal = null;
-
-    function abrirEscanerCal(inputId) {
-      currentTargetInputCal = document.getElementById(inputId);
-      document.getElementById('scan-modal-cal').style.display = 'flex';
-      html5QrCodeCal = new Html5Qrcode("reader-cal");
-      html5QrCodeCal.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 250, height: 120 } },
-        (decodedText) => {
-          if (currentTargetInputCal) { currentTargetInputCal.value = decodedText; }
-          cerrarEscanerCal();
-        },
-        () => {}
-      ).catch(() => {
-        alert('No se pudo acceder a la cámara. Verifica los permisos del navegador.');
-        cerrarEscanerCal();
-      });
-    }
-
-    function cerrarEscanerCal() {
-      document.getElementById('scan-modal-cal').style.display = 'none';
-      if (html5QrCodeCal) {
-        html5QrCodeCal.stop().then(() => html5QrCodeCal.clear()).catch(() => {});
-      }
-    }
-
-    function actualizarCamposTipo() {
-      const tipo = document.getElementById('tipo-select').value;
-      const esDiferencia = tipo === 'Diferencia de Stock';
-      document.getElementById('seccion-diferencia-stock').style.display = esDiferencia ? 'block' : 'none';
-      document.getElementById('campos-diferencia-stock').style.display = esDiferencia ? 'grid' : 'none';
-    }
-    actualizarCamposTipo();
-
-    function agregarFilaItem() {
-      const tbody = document.getElementById('items-tbody');
-      if (!tbody) return;
-      const fila = document.createElement('tr');
-      fila.innerHTML = `
-        <td><input type="text" name="item[]"></td>
-        <td><input type="text" name="descripcion_material[]"></td>
-        <td><input type="number" step="0.01" name="cantidad[]"></td>
-        <td><button type="button" class="btn-mini btn-mini-danger" onclick="quitarFilaItem(this)">Quitar</button></td>
-      `;
-      tbody.appendChild(fila);
-    }
-
-    function quitarFilaItem(btn) {
-      const tbody = document.getElementById('items-tbody');
-      if (tbody && tbody.rows.length > 1) {
-        btn.closest('tr').remove();
-      }
-    }
-  </script>
-""" + FOOTER
-
-ADMIN_USERS_TEMPLATE = BASE_HEAD + NAV + """
-  <h1 class="page-title">Usuarios</h1>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for cat, msg in messages %}
-      <div class="flash flash-{{ 'error' if cat=='error' else 'success' }}">{{ msg }}</div>
-    {% endfor %}
-  {% endwith %}
-
-  <div class="form-card" style="margin-bottom:20px;">
-    <h2 style="font-size:15px;color:var(--blue);margin:0 0 6px;">Crear usuario</h2>
-    <form method="post" action="{{ url_for('admin_users_new') }}">
-      <div class="form-grid">
-        <div>
-          <label>Usuario *</label>
-          <input type="text" name="username" required>
-        </div>
-        <div>
-          <label>Contraseña *</label>
-          <input type="password" name="password" required minlength="4">
-        </div>
-        <div>
-          <label>Rol *</label>
-          <select name="role" required>
-            <option value="user">Usuario</option>
-            <option value="admin">Administrador</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-actions">
-        <button class="btn-primary" type="submit">Crear usuario</button>
-      </div>
-    </form>
-  </div>
-
-  <div class="table-wrap">
-    <table class="data-table">
-      <thead>
-        <tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Creado</th><th></th></tr>
-      </thead>
-      <tbody>
-        {% for u in usuarios %}
-        <tr>
-          <td>{{ u.username }}</td>
-          <td>
-            {% if u.role == 'admin' %}
-              <span class="pill pill-blue">Administrador</span>
-            {% else %}
-              <span class="pill pill-orange">Usuario</span>
-            {% endif %}
-          </td>
-          <td>
-            {% if u.activo %}
-              <span class="pill pill-green">Activo</span>
-            {% else %}
-              <span class="pill pill-red">Desactivado</span>
-            {% endif %}
-          </td>
-          <td>{{ u.created_at }}</td>
-          <td class="actions-cell">
-            {% if u.id != session.get('user_id') %}
-            <form method="post" action="{{ url_for('admin_users_toggle', user_id=u.id) }}" style="display:inline;">
-              <button class="btn-mini {{ 'btn-mini-danger' if u.activo else '' }}" type="submit">
-                {{ 'Desactivar' if u.activo else 'Activar' }}
-              </button>
-            </form>
-            {% else %}
-            <span class="muted">(tu cuenta)</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-""" + FOOTER
+# ── Rutas de datos ─────────────────────────────────────────────────────────
+def _resolve_data_dir():
+    """Intenta usar una carpeta 'data' junto al script; si no es escribible
+    (puede pasar en algunos entornos de Android), usa una carpeta en el
+    home del usuario como respaldo, para que la app nunca falle por esto.
+    Si existe la variable de entorno DATA_DIR (por ejemplo, apuntando a un
+    disco persistente en Render), esa tiene prioridad sobre todo lo demas."""
+    candidates = []
+    env_dir = os.environ.get("DATA_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir))
+    candidates += [Path(__file__).resolve().parent / "data", Path.home() / "Nefab_5S_Web_data"]
+    for c in candidates:
+        try:
+            c.mkdir(parents=True, exist_ok=True)
+            probe = c / ".write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            return c
+        except Exception:
+            continue
+    # Ultimo recurso: carpeta temporal del sistema
+    fallback = Path(tempfile.gettempdir()) / "Nefab_5S_Web_data"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
 
 
-# --------------------------------------------------------------------------
-# Routes: Auth
-# --------------------------------------------------------------------------
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-        db = get_db()
-        user = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-        if user and not user["activo"]:
-            flash("Este usuario está desactivado. Contacta a un administrador.", "error")
-        elif user and check_password_hash(user["password_hash"], password):
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-            session["role"] = user["role"]
-            next_url = request.args.get("next") or url_for("hub")
-            return redirect(next_url)
+DATA_DIR = _resolve_data_dir()
+PLANTAS_FILE = DATA_DIR / "plantas_5s.json"
+DB_FILE = DATA_DIR / "nefab5s.db"
+PHOTOS_DIR = DATA_DIR / "photos"
+PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+SEG_PHOTOS_DIR = DATA_DIR / "seguridad_photos"
+SEG_PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+ALLOWED_PHOTO_EXT = {"jpg", "jpeg", "png", "gif", "webp", "heic", "heif"}
+
+# ── Persistencia: PostgreSQL en Render / SQLite local ─────────────────────
+# En Render, define DATABASE_URL y toda la informacion (incluidas las fotos)
+# se guarda en PostgreSQL. En PC/Pydroid, sin DATABASE_URL, la app mantiene
+# compatibilidad con SQLite local.
+import sqlite3
+
+DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
+USING_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+
+_HALLAZGO_COLS = ["date", "area", "pillar", "description", "severity", "status",
+                  "corrective_action", "responsible", "due_date", "evidencia"]
+_AUDIT_FLAT_COLS = (["fecha", "area", "auditor", "notes", "pct_total", "clasificacion", "evidencia"]
+                     + [f"pct_{pil}" for pil in PILLARS])
+
+
+class _PgResult:
+    def __init__(self, cursor):
+        self.cursor = cursor
+        self.lastrowid = None
+
+    def fetchone(self):
+        return self.cursor.fetchone()
+
+    def fetchall(self):
+        return self.cursor.fetchall()
+
+    def __iter__(self):
+        return iter(self.cursor.fetchall())
+
+
+class _PgConnection:
+    """Adaptador pequeño para conservar el SQL existente de la app."""
+    def __init__(self):
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        self.raw = psycopg2.connect(DATABASE_URL, sslmode="require")
+        self.RealDictCursor = RealDictCursor
+
+    @staticmethod
+    def _sql(sql):
+        sql = sql.replace("?", "%s")
+        sql = sql.replace("ORDER BY rowid ASC", "ORDER BY id ASC")
+        if "INSERT OR IGNORE INTO" in sql:
+            sql = sql.replace("INSERT OR IGNORE INTO", "INSERT INTO")
+            sql = sql.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+        return sql
+
+    def execute(self, sql, params=()):
+        cur = self.raw.cursor(cursor_factory=self.RealDictCursor)
+        cur.execute(self._sql(sql), params)
+        return _PgResult(cur)
+
+    def commit(self):
+        self.raw.commit()
+
+    def rollback(self):
+        self.raw.rollback()
+
+    def close(self):
+        self.raw.close()
+
+
+def get_db():
+    if USING_POSTGRES:
+        return _PgConnection()
+    conn = sqlite3.connect(str(DB_FILE), timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    return conn
+
+
+def init_db():
+    audit_pct_cols = ",".join(f"pct_{pil} REAL" for pil in PILLARS)
+    conn = get_db()
+    if USING_POSTGRES:
+        statements = f"""
+        CREATE TABLE IF NOT EXISTS plantas (
+            id TEXT PRIMARY KEY, name TEXT, site TEXT, customer TEXT, owner TEXT,
+            problem TEXT, area TEXT, pais TEXT, areas_json TEXT,
+            created_at TEXT, updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS auditorias (
+            id BIGSERIAL PRIMARY KEY, planta_id TEXT,
+            fecha TEXT, area TEXT, auditor TEXT, respuestas_json TEXT, notes TEXT,
+            pct_total REAL, {audit_pct_cols}, clasificacion TEXT, evidencia TEXT
+        );
+        CREATE TABLE IF NOT EXISTS hallazgos (
+            id BIGSERIAL PRIMARY KEY, planta_id TEXT,
+            date TEXT, area TEXT, pillar TEXT, description TEXT, severity TEXT, status TEXT,
+            corrective_action TEXT, responsible TEXT, due_date TEXT, evidencia TEXT
+        );
+        CREATE TABLE IF NOT EXISTS evidence (
+            id BIGSERIAL PRIMARY KEY, planta_id TEXT,
+            filename TEXT, caption TEXT, date TEXT, photo_data BYTEA, mime_type TEXT
+        );
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY, email TEXT, password_hash TEXT, role TEXT
+        );
+        CREATE TABLE IF NOT EXISTS catalogo (
+            id BIGSERIAL PRIMARY KEY, fase TEXT, descripcion TEXT
+        );
+        CREATE TABLE IF NOT EXISTS paises_plantas (
+            id BIGSERIAL PRIMARY KEY, pais TEXT, planta TEXT, areas_json TEXT
+        );
+        CREATE TABLE IF NOT EXISTS seg_sitios (
+            id TEXT PRIMARY KEY, name TEXT, site TEXT, customer TEXT, owner TEXT,
+            problem TEXT, created_at TEXT, updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS seg_hallazgos (
+            id BIGSERIAL PRIMARY KEY, sitio_id TEXT,
+            date TEXT, area TEXT, description TEXT, severity TEXT, status TEXT,
+            responsible TEXT, due_date TEXT, created_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS seg_fotos (
+            id BIGSERIAL PRIMARY KEY, hallazgo_id BIGINT,
+            filename TEXT, caption TEXT, date TEXT, photo_data BYTEA, mime_type TEXT
+        );
+        ALTER TABLE evidence ADD COLUMN IF NOT EXISTS photo_data BYTEA;
+        ALTER TABLE evidence ADD COLUMN IF NOT EXISTS mime_type TEXT;
+        ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS photo_data BYTEA;
+        ALTER TABLE seg_fotos ADD COLUMN IF NOT EXISTS mime_type TEXT;
+        CREATE INDEX IF NOT EXISTS idx_seg_hallazgos_sid ON seg_hallazgos(sitio_id);
+        CREATE INDEX IF NOT EXISTS idx_seg_fotos_hid ON seg_fotos(hallazgo_id);
+        CREATE INDEX IF NOT EXISTS idx_auditorias_pid ON auditorias(planta_id);
+        CREATE INDEX IF NOT EXISTS idx_hallazgos_pid ON hallazgos(planta_id);
+        CREATE INDEX IF NOT EXISTS idx_evidence_pid ON evidence(planta_id);
+        """
+        for stmt in statements.split(";"):
+            if stmt.strip():
+                conn.execute(stmt)
+    else:
+        conn.executescript(f"""
+            CREATE TABLE IF NOT EXISTS plantas (
+                id TEXT PRIMARY KEY, name TEXT, site TEXT, customer TEXT, owner TEXT,
+                problem TEXT, area TEXT, pais TEXT, areas_json TEXT,
+                created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS auditorias (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+                fecha TEXT, area TEXT, auditor TEXT, respuestas_json TEXT, notes TEXT,
+                pct_total REAL, {audit_pct_cols}, clasificacion TEXT, evidencia TEXT
+            );
+            CREATE TABLE IF NOT EXISTS hallazgos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+                date TEXT, area TEXT, pillar TEXT, description TEXT, severity TEXT, status TEXT,
+                corrective_action TEXT, responsible TEXT, due_date TEXT, evidencia TEXT
+            );
+            CREATE TABLE IF NOT EXISTS evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, planta_id TEXT,
+                filename TEXT, caption TEXT, date TEXT, photo_data BLOB, mime_type TEXT
+            );
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY, email TEXT, password_hash TEXT, role TEXT
+            );
+            CREATE TABLE IF NOT EXISTS catalogo (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, fase TEXT, descripcion TEXT
+            );
+            CREATE TABLE IF NOT EXISTS paises_plantas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, pais TEXT, planta TEXT, areas_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS seg_sitios (
+                id TEXT PRIMARY KEY, name TEXT, site TEXT, customer TEXT, owner TEXT,
+                problem TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS seg_hallazgos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, sitio_id TEXT,
+                date TEXT, area TEXT, description TEXT, severity TEXT, status TEXT,
+                responsible TEXT, due_date TEXT, created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS seg_fotos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, hallazgo_id INTEGER,
+                filename TEXT, caption TEXT, date TEXT, photo_data BLOB, mime_type TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_seg_hallazgos_sid ON seg_hallazgos(sitio_id);
+            CREATE INDEX IF NOT EXISTS idx_seg_fotos_hid ON seg_fotos(hallazgo_id);
+            CREATE INDEX IF NOT EXISTS idx_auditorias_pid ON auditorias(planta_id);
+            CREATE INDEX IF NOT EXISTS idx_hallazgos_pid ON hallazgos(planta_id);
+            CREATE INDEX IF NOT EXISTS idx_evidence_pid ON evidence(planta_id);
+        """)
+        # Compatibilidad con bases SQLite ya creadas antes de esta version.
+        for table, col, coltype in (("evidence", "photo_data", "BLOB"), ("evidence", "mime_type", "TEXT"),
+                                    ("seg_fotos", "photo_data", "BLOB"), ("seg_fotos", "mime_type", "TEXT")):
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            if col not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+    conn.commit()
+    conn.close()
+
+
+def migrate_legacy_data_if_needed():
+    """Migra automaticamente datos del disco antiguo a PostgreSQL.
+
+    Para una migracion segura en Render: primero desplegar esta version con el
+    Persistent Disk aun conectado y DATA_DIR apuntando al disco. Al arrancar,
+    si PostgreSQL esta vacio, copia SQLite + fotos al DATABASE_URL.
+    """
+    if not USING_POSTGRES:
+        # Conserva la antigua migracion JSON -> SQLite solo en modo local.
+        migrate_json_to_sqlite_if_needed_local()
+        return
+    if not DB_FILE.exists():
+        return
+    pg = get_db()
+    try:
+        if pg.execute("SELECT COUNT(*) AS c FROM plantas").fetchone()["c"] > 0:
+            return
+    finally:
+        pg.close()
+    src = sqlite3.connect(str(DB_FILE))
+    src.row_factory = sqlite3.Row
+    pg = get_db()
+    tables = ["plantas", "auditorias", "hallazgos", "users", "catalogo", "paises_plantas",
+              "seg_sitios", "seg_hallazgos"]
+    try:
+        for table in tables:
+            try:
+                rows = src.execute(f"SELECT * FROM {table}").fetchall()
+            except sqlite3.Error:
+                continue
+            for row in rows:
+                d = dict(row)
+                cols = list(d)
+                vals = [d[c] for c in cols]
+                placeholders = ",".join("?" for _ in cols)
+                pg.execute(f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING", vals)
+
+        # Evidencias 5S: incorpora bytes de las fotos del disco.
+        try:
+            rows = src.execute("SELECT * FROM evidence").fetchall()
+            for row in rows:
+                d = dict(row)
+                photo_path = PHOTOS_DIR / d.get("planta_id", "") / d.get("filename", "")
+                blob = photo_path.read_bytes() if photo_path.exists() else d.get("photo_data")
+                mime = d.get("mime_type") or _mime_from_filename(d.get("filename", ""))
+                pg.execute("INSERT INTO evidence (id,planta_id,filename,caption,date,photo_data,mime_type) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                           (d.get("id"), d.get("planta_id"), d.get("filename"), d.get("caption"), d.get("date"), blob, mime))
+        except sqlite3.Error:
+            pass
+
+        # Fotos de seguridad.
+        try:
+            rows = src.execute("SELECT sf.*, sh.sitio_id FROM seg_fotos sf LEFT JOIN seg_hallazgos sh ON sh.id=sf.hallazgo_id").fetchall()
+            for row in rows:
+                d = dict(row)
+                photo_path = SEG_PHOTOS_DIR / (d.get("sitio_id") or "") / d.get("filename", "")
+                blob = photo_path.read_bytes() if photo_path.exists() else d.get("photo_data")
+                mime = d.get("mime_type") or _mime_from_filename(d.get("filename", ""))
+                pg.execute("INSERT INTO seg_fotos (id,hallazgo_id,filename,caption,date,photo_data,mime_type) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                           (d.get("id"), d.get("hallazgo_id"), d.get("filename"), d.get("caption"), d.get("date"), blob, mime))
+        except sqlite3.Error:
+            pass
+        # Ajusta secuencias seriales despues de importar IDs historicos.
+        for table in ("auditorias", "hallazgos", "evidence", "catalogo", "paises_plantas", "seg_hallazgos", "seg_fotos"):
+            pg.execute(f"SELECT setval(pg_get_serial_sequence('{table}','id'), COALESCE((SELECT MAX(id) FROM {table}), 1), true)")
+        pg.commit()
+        print("[Migración] SQLite y fotografías copiadas a PostgreSQL correctamente.")
+    except Exception:
+        pg.rollback()
+        raise
+    finally:
+        src.close()
+        pg.close()
+
+
+
+def backfill_missing_photo_blobs_from_disk():
+    """Copia a PostgreSQL fotos antiguas que todavía existen en el Persistent Disk.
+
+    Se ejecuta aunque la base PostgreSQL ya tenga plantas/datos. Esto corrige migraciones
+    parciales donde los registros se copiaron antes que los blobs fotográficos.
+    """
+    if not USING_POSTGRES:
+        return
+    conn = get_db()
+    updated = 0
+    try:
+        rows = conn.execute("SELECT id,planta_id,filename FROM evidence WHERE photo_data IS NULL").fetchall()
+        for row in rows:
+            d = dict(row)
+            path = PHOTOS_DIR / (d.get("planta_id") or "") / (d.get("filename") or "")
+            if path.is_file():
+                conn.execute("UPDATE evidence SET photo_data=?, mime_type=? WHERE id=?",
+                             (path.read_bytes(), _mime_from_filename(path.name), d["id"]))
+                updated += 1
+
+        rows = conn.execute("""
+            SELECT sf.id, sf.filename, sh.sitio_id
+            FROM seg_fotos sf
+            JOIN seg_hallazgos sh ON sh.id=sf.hallazgo_id
+            WHERE sf.photo_data IS NULL
+        """).fetchall()
+        for row in rows:
+            d = dict(row)
+            path = SEG_PHOTOS_DIR / (d.get("sitio_id") or "") / (d.get("filename") or "")
+            if path.is_file():
+                conn.execute("UPDATE seg_fotos SET photo_data=?, mime_type=? WHERE id=?",
+                             (path.read_bytes(), _mime_from_filename(path.name), d["id"]))
+                updated += 1
+        conn.commit()
+        if updated:
+            print(f"[Migración] {updated} fotografías antiguas recuperadas desde el Persistent Disk.")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def migrate_json_to_sqlite_if_needed_local():
+    """Compatibilidad con instalaciones antiguas basadas en JSON."""
+    conn = get_db()
+    existing = conn.execute("SELECT COUNT(*) AS c FROM plantas").fetchone()["c"]
+    conn.close()
+    if existing == 0 and PLANTAS_FILE.exists():
+        try:
+            old_plantas = json.loads(PLANTAS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            old_plantas = []
+        conn = get_db()
+        for p in old_plantas:
+            conn.execute("INSERT OR IGNORE INTO plantas (id,name,site,customer,owner,problem,area,pais,areas_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                         (p.get("id"), p.get("name", ""), p.get("site", ""), p.get("customer", ""), p.get("owner", ""), p.get("problem", ""), p.get("area", "Logística"), p.get("pais", ""), json.dumps(p.get("areas", [])), p.get("created_at", ""), p.get("updated_at", "")))
+            for a in p.get("auditorias", []):
+                cols = _AUDIT_FLAT_COLS + ["respuestas_json"]
+                vals = [a.get(c, "") for c in _AUDIT_FLAT_COLS] + [json.dumps(a.get("respuestas", []))]
+                conn.execute(f"INSERT INTO auditorias (planta_id,{','.join(cols)}) VALUES (?,{','.join('?' * len(cols))})", (p.get("id"), *vals))
+            for h in p.get("hallazgos", []):
+                conn.execute(f"INSERT INTO hallazgos (planta_id,{','.join(_HALLAZGO_COLS)}) VALUES (?,{','.join('?' * len(_HALLAZGO_COLS))})", (p.get("id"), *[h.get(c, "") for c in _HALLAZGO_COLS]))
+            for ev in p.get("evidence", []):
+                conn.execute("INSERT INTO evidence (planta_id,filename,caption,date) VALUES (?,?,?,?)", (p.get("id"), ev.get("filename", ""), ev.get("caption", ""), ev.get("date", "")))
+        conn.commit(); conn.close()
+    for filename, table, loader in (("usuarios_5s.json", "users", None), ("catalogo_5s.json", "catalogo", None), ("paises_plantas.json", "paises_plantas", None)):
+        old_file = DATA_DIR / filename
+        conn = get_db(); count = conn.execute(f"SELECT COUNT(*) c FROM {table}").fetchone()["c"]; conn.close()
+        if count or not old_file.exists():
+            continue
+        try: data = json.loads(old_file.read_text(encoding="utf-8"))
+        except Exception: continue
+        conn = get_db()
+        if table == "users":
+            for u in data: conn.execute("INSERT OR IGNORE INTO users (id,email,password_hash,role) VALUES (?,?,?,?)", (u.get("id"), u.get("email"), u.get("password_hash"), u.get("role", "user")))
+        elif table == "catalogo":
+            for c in data: conn.execute("INSERT INTO catalogo (fase,descripcion) VALUES (?,?)", (c.get("fase", ""), c.get("descripcion", "")))
         else:
-            flash("Usuario o contraseña incorrectos.", "error")
-    return render_template_string(LOGIN_TEMPLATE, title="Ingresar")
+            for r in data: conn.execute("INSERT INTO paises_plantas (pais,planta,areas_json) VALUES (?,?,?)", (r.get("pais", ""), r.get("planta", ""), json.dumps(r.get("areas", []))))
+        conn.commit(); conn.close()
 
 
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for("login"))
+def _mime_from_filename(filename):
+    import mimetypes
+    return mimetypes.guess_type(filename or "")[0] or "application/octet-stream"
+
+def _nth_row_id(conn, table, pid, idx, pid_col="planta_id"):
+    row = conn.execute(
+        f"SELECT id FROM {table} WHERE {pid_col}=? ORDER BY id LIMIT 1 OFFSET ?", (pid, idx)
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def touch_planta_db(pid):
+    conn = get_db()
+    conn.execute("UPDATE plantas SET updated_at=? WHERE id=?",
+                 (datetime.now().strftime("%d/%m/%Y %H:%M"), pid))
+    conn.commit()
+    conn.close()
+
+
+def get_planta_dict(pid):
+    conn = get_db()
+    prow = conn.execute("SELECT * FROM plantas WHERE id=?", (pid,)).fetchone()
+    if not prow:
+        conn.close()
+        return None
+    p = dict(prow)
+    p["areas"] = json.loads(p.pop("areas_json") or "[]")
+    auditorias = []
+    for r in conn.execute("SELECT * FROM auditorias WHERE planta_id=? ORDER BY id", (pid,)):
+        d = dict(r)
+        d["respuestas"] = json.loads(d.pop("respuestas_json") or "[]")
+        auditorias.append(d)
+    p["auditorias"] = auditorias
+    p["hallazgos"] = [dict(r) for r in conn.execute(
+        "SELECT * FROM hallazgos WHERE planta_id=? ORDER BY id", (pid,))]
+    p["evidence"] = [dict(r) for r in conn.execute(
+        "SELECT id,planta_id,filename,caption,date,mime_type FROM evidence WHERE planta_id=? ORDER BY id", (pid,))]
+    conn.close()
+    return p
+
+
+def load_plantas():
+    conn = get_db()
+    ids = [r["id"] for r in conn.execute("SELECT id FROM plantas ORDER BY rowid ASC")]
+    conn.close()
+    return [get_planta_dict(pid) for pid in ids]
+
+
+def create_planta_db(name, site, customer, owner, problem, area="Logística", pais="", areas=None):
+    pid = gen_id()
+    now = date.today().isoformat()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO plantas (id,name,site,customer,owner,problem,area,pais,areas_json,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (pid, name or "Nueva planta 5S", site, customer, owner, problem,
+         area if area in AREAS else "Logística", pais or "", json.dumps(areas or []), now, now),
+    )
+    conn.commit()
+    conn.close()
+    return pid
+
+
+def update_planta_db(pid, name, site, customer, owner, problem, area, pais, areas):
+    conn = get_db()
+    conn.execute(
+        "UPDATE plantas SET name=?,site=?,customer=?,owner=?,problem=?,area=?,pais=?,areas_json=?,updated_at=? "
+        "WHERE id=?",
+        (name, site, customer, owner, problem, area, pais, json.dumps(areas or []),
+         datetime.now().strftime("%d/%m/%Y %H:%M"), pid),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_planta_db(pid):
+    conn = get_db()
+    for table in ("auditorias", "hallazgos", "evidence"):
+        conn.execute(f"DELETE FROM {table} WHERE planta_id=?", (pid,))
+    conn.execute("DELETE FROM plantas WHERE id=?", (pid,))
+    conn.commit()
+    conn.close()
+
+
+def add_auditoria_db(pid, item):
+    conn = get_db()
+    cols = _AUDIT_FLAT_COLS + ["respuestas_json"]
+    vals = [item.get(c, "") for c in _AUDIT_FLAT_COLS] + [json.dumps(item.get("respuestas", []))]
+    placeholders = ",".join("?" * (len(cols) + 1))
+    conn.execute(f"INSERT INTO auditorias (planta_id,{','.join(cols)}) VALUES ({placeholders})", (pid, *vals))
+    conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def update_auditoria_db(pid, idx, item):
+    conn = get_db()
+    real_id = _nth_row_id(conn, "auditorias", pid, idx)
+    if real_id is not None:
+        cols = _AUDIT_FLAT_COLS + ["respuestas_json"]
+        vals = [item.get(c, "") for c in _AUDIT_FLAT_COLS] + [json.dumps(item.get("respuestas", []))]
+        set_clause = ",".join(f"{c}=?" for c in cols)
+        conn.execute(f"UPDATE auditorias SET {set_clause} WHERE id=?", (*vals, real_id))
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def delete_auditoria_db(pid, idx):
+    conn = get_db()
+    real_id = _nth_row_id(conn, "auditorias", pid, idx)
+    if real_id is not None:
+        conn.execute("DELETE FROM auditorias WHERE id=?", (real_id,))
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def add_hallazgo_db(pid, item):
+    conn = get_db()
+    placeholders = ",".join("?" * (len(_HALLAZGO_COLS) + 1))
+    conn.execute(f"INSERT INTO hallazgos (planta_id,{','.join(_HALLAZGO_COLS)}) VALUES ({placeholders})",
+                 (pid, *[item.get(c, "") for c in _HALLAZGO_COLS]))
+    conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def update_hallazgo_db(pid, idx, item):
+    conn = get_db()
+    real_id = _nth_row_id(conn, "hallazgos", pid, idx)
+    if real_id is not None:
+        set_clause = ",".join(f"{c}=?" for c in _HALLAZGO_COLS)
+        conn.execute(f"UPDATE hallazgos SET {set_clause} WHERE id=?",
+                     (*[item.get(c, "") for c in _HALLAZGO_COLS], real_id))
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def delete_hallazgo_db(pid, idx):
+    conn = get_db()
+    real_id = _nth_row_id(conn, "hallazgos", pid, idx)
+    if real_id is not None:
+        conn.execute("DELETE FROM hallazgos WHERE id=?", (real_id,))
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def close_hallazgo_db(pid, idx):
+    conn = get_db()
+    real_id = _nth_row_id(conn, "hallazgos", pid, idx)
+    if real_id is not None:
+        conn.execute("UPDATE hallazgos SET status='Cerrado' WHERE id=?", (real_id,))
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def bulk_delete_hallazgos_db(pid, idxs):
+    conn = get_db()
+    rows = conn.execute("SELECT id FROM hallazgos WHERE planta_id=? ORDER BY id", (pid,)).fetchall()
+    ids_to_delete = [rows[i]["id"] for i in idxs if 0 <= i < len(rows)]
+    if ids_to_delete:
+        placeholders = ",".join("?" * len(ids_to_delete))
+        conn.execute(f"DELETE FROM hallazgos WHERE id IN ({placeholders})", ids_to_delete)
+        conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def add_evidence_db(pid, filename, caption, ev_date, photo_data=None, mime_type=None):
+    conn = get_db()
+    conn.execute("INSERT INTO evidence (planta_id,filename,caption,date,photo_data,mime_type) VALUES (?,?,?,?,?,?)",
+                 (pid, filename, caption, ev_date, photo_data, mime_type or _mime_from_filename(filename)))
+    conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def get_evidence_blob(pid, filename):
+    conn = get_db()
+    row = conn.execute("SELECT photo_data,mime_type FROM evidence WHERE planta_id=? AND filename=? ORDER BY id DESC LIMIT 1", (pid, filename)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def delete_evidence_db(pid, filename):
+    conn = get_db()
+    conn.execute("DELETE FROM evidence WHERE planta_id=? AND filename=?", (pid, filename))
+    conn.commit()
+    conn.close()
+    touch_planta_db(pid)
+
+
+def load_users():
+    conn = get_db()
+    users = [dict(r) for r in conn.execute("SELECT * FROM users ORDER BY rowid ASC")]
+    conn.close()
+    return users
+
+
+def save_users(users):
+    conn = get_db()
+    conn.execute("DELETE FROM users")
+    for u in users:
+        conn.execute("INSERT INTO users (id,email,password_hash,role) VALUES (?,?,?,?)",
+                     (u["id"], u["email"], u["password_hash"], u.get("role", "user")))
+    conn.commit()
+    conn.close()
+
+
+def load_catalogo():
+    conn = get_db()
+    rows = [dict(r) for r in conn.execute("SELECT fase, descripcion FROM catalogo ORDER BY rowid ASC")]
+    conn.close()
+    return rows if rows else DEFAULT_CATALOGO
+
+
+def save_catalogo(data):
+    conn = get_db()
+    conn.execute("DELETE FROM catalogo")
+    for c in data:
+        conn.execute("INSERT INTO catalogo (fase,descripcion) VALUES (?,?)",
+                     (c.get("fase", ""), c.get("descripcion", "")))
+    conn.commit()
+    conn.close()
+
+
+def load_paises_plantas():
+    conn = get_db()
+    rows = []
+    for r in conn.execute("SELECT * FROM paises_plantas ORDER BY rowid ASC"):
+        d = dict(r)
+        d["areas"] = json.loads(d.pop("areas_json") or "[]")
+        rows.append(d)
+    conn.close()
+    return rows
+
+
+def save_paises_plantas(data):
+    conn = get_db()
+    conn.execute("DELETE FROM paises_plantas")
+    for r in data:
+        conn.execute("INSERT INTO paises_plantas (pais,planta,areas_json) VALUES (?,?,?)",
+                     (r.get("pais", ""), r.get("planta", ""), json.dumps(r.get("areas", []))))
+    conn.commit()
+    conn.close()
+
+
+# ── Inspección de Seguridad (proyecto separado de 5S: sitios, hallazgos
+# con severidad/responsable/estado igual que 5S, pero con MULTIPLES fotos
+# por hallazgo en vez de una sola) ─────────────────────────────────────────
+def touch_seg_sitio(sid):
+    conn = get_db()
+    conn.execute("UPDATE seg_sitios SET updated_at=? WHERE id=?",
+                 (datetime.now().strftime("%d/%m/%Y %H:%M"), sid))
+    conn.commit()
+    conn.close()
+
+
+def load_seg_sitios():
+    conn = get_db()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM seg_sitios ORDER BY rowid ASC")]
+    conn.close()
+    return rows
+
+
+def get_seg_sitio(sid):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM seg_sitios WHERE id=?", (sid,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    s = dict(row)
+    s["hallazgos"] = [dict(r) for r in conn.execute(
+        "SELECT * FROM seg_hallazgos WHERE sitio_id=? ORDER BY id DESC", (sid,))]
+    for h in s["hallazgos"]:
+        h["fotos"] = [dict(r) for r in conn.execute(
+            "SELECT id,hallazgo_id,filename,caption,date,mime_type FROM seg_fotos WHERE hallazgo_id=? ORDER BY id", (h["id"],))]
+    conn.close()
+    return s
+
+
+def create_seg_sitio_db(name, site, customer, owner, problem):
+    sid = gen_id()
+    now = date.today().isoformat()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO seg_sitios (id,name,site,customer,owner,problem,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (sid, name or "Nuevo sitio", site, customer, owner, problem, now, now),
+    )
+    conn.commit()
+    conn.close()
+    return sid
+
+
+def update_seg_sitio_db(sid, name, site, customer, owner, problem):
+    conn = get_db()
+    conn.execute(
+        "UPDATE seg_sitios SET name=?,site=?,customer=?,owner=?,problem=?,updated_at=? WHERE id=?",
+        (name, site, customer, owner, problem, datetime.now().strftime("%d/%m/%Y %H:%M"), sid),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_seg_sitio_db(sid):
+    conn = get_db()
+    hids = [r["id"] for r in conn.execute("SELECT id FROM seg_hallazgos WHERE sitio_id=?", (sid,))]
+    for hid in hids:
+        conn.execute("DELETE FROM seg_fotos WHERE hallazgo_id=?", (hid,))
+    conn.execute("DELETE FROM seg_hallazgos WHERE sitio_id=?", (sid,))
+    conn.execute("DELETE FROM seg_sitios WHERE id=?", (sid,))
+    conn.commit()
+    conn.close()
+    try:
+        import shutil
+        shutil.rmtree(SEG_PHOTOS_DIR / sid, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def add_seg_hallazgo_db(sid, item):
+    conn = get_db()
+    sql = ("INSERT INTO seg_hallazgos (sitio_id,date,area,description,severity,status,responsible,"
+           "due_date,created_at) VALUES (?,?,?,?,?,?,?,?,?)")
+    params = (sid, item.get("date", ""), item.get("area", ""), item.get("description", ""),
+              item.get("severity", ""), item.get("status", ""), item.get("responsible", ""),
+              item.get("due_date", ""), datetime.now().strftime("%d/%m/%Y %H:%M"))
+    if USING_POSTGRES:
+        row = conn.execute(sql + " RETURNING id", params).fetchone()
+        new_id = row["id"]
+    else:
+        cur = conn.execute(sql, params)
+        new_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    touch_seg_sitio(sid)
+    return new_id
+
+
+def update_seg_hallazgo_db(hid, item):
+    conn = get_db()
+    conn.execute(
+        "UPDATE seg_hallazgos SET date=?,area=?,description=?,severity=?,status=?,responsible=?,due_date=? "
+        "WHERE id=?",
+        (item.get("date", ""), item.get("area", ""), item.get("description", ""), item.get("severity", ""),
+         item.get("status", ""), item.get("responsible", ""), item.get("due_date", ""), hid),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_seg_hallazgo_db(hid):
+    conn = get_db()
+    conn.execute("DELETE FROM seg_fotos WHERE hallazgo_id=?", (hid,))
+    conn.execute("DELETE FROM seg_hallazgos WHERE id=?", (hid,))
+    conn.commit()
+    conn.close()
+
+
+def close_seg_hallazgo_db(hid):
+    conn = get_db()
+    conn.execute("UPDATE seg_hallazgos SET status='Cerrado' WHERE id=?", (hid,))
+    conn.commit()
+    conn.close()
+
+
+def get_seg_hallazgo(hid):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM seg_hallazgos WHERE id=?", (hid,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    h = dict(row)
+    h["fotos"] = [dict(r) for r in conn.execute(
+        "SELECT id,hallazgo_id,filename,caption,date,mime_type FROM seg_fotos WHERE hallazgo_id=? ORDER BY id", (hid,))]
+    conn.close()
+    return h
+
+
+def add_seg_foto_db(hid, filename, caption, photo_data=None, mime_type=None):
+    conn = get_db()
+    conn.execute("INSERT INTO seg_fotos (hallazgo_id,filename,caption,date,photo_data,mime_type) VALUES (?,?,?,?,?,?)",
+                 (hid, filename, caption, date.today().isoformat(), photo_data, mime_type or _mime_from_filename(filename)))
+    conn.commit()
+    conn.close()
+
+
+def get_seg_foto_blob(sid, filename):
+    conn = get_db()
+    row = conn.execute("SELECT sf.photo_data,sf.mime_type FROM seg_fotos sf JOIN seg_hallazgos sh ON sh.id=sf.hallazgo_id WHERE sh.sitio_id=? AND sf.filename=? ORDER BY sf.id DESC LIMIT 1", (sid, filename)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def delete_seg_foto_db(foto_id):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM seg_fotos WHERE id=?", (foto_id,)).fetchone()
+    conn.execute("DELETE FROM seg_fotos WHERE id=?", (foto_id,))
+    conn.commit()
+    conn.close()
+    return dict(row) if row else None
+
+
+def save_seg_photos(sid, hid, files):
+    """Guarda fotos directamente en la base de datos persistente."""
+    saved = []
+    for file in files:
+        if not file or not file.filename:
+            continue
+        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+        if ext not in ALLOWED_PHOTO_EXT:
+            continue
+        unique_name = secure_filename(f"seg_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=5))}.{ext}")
+        blob = file.read()
+        add_seg_foto_db(hid, unique_name, "", blob, file.mimetype or _mime_from_filename(unique_name))
+        saved.append(unique_name)
+    return saved
+
+
+app = Flask(__name__)
+app.jinja_loader = DictLoader(TEMPLATES)
+app.secret_key = os.environ.get("SECRET_KEY", "nefab-5s-web-dev-only")
+
+init_db()
+migrate_legacy_data_if_needed()
+backfill_missing_photo_blobs_from_disk()
+
+
+app.jinja_env.globals.update(
+    tr=tr, AREA_COLOR=AREA_COLOR, AREAS=AREAS, PILLARS=PILLARS, PILLAR_LABELS=PILLAR_LABELS,
+    SCORE_OPTIONS=SCORE_OPTIONS, SEVERITIES=SEVERITIES, FINDING_STATUSES=FINDING_STATUSES,
+    FASES=FASES, FASE_KEYS=FASE_KEYS, FASE_COLOR=FASE_COLOR, PREGUNTAS=PREGUNTAS,
+    DEFAULT_CATALOGO=DEFAULT_CATALOGO,
+    NB=NB, NO=NO, NG=NG, NGR=NGR, BG=BG, CARD=CARD, BORDER=BORDER,
+    DARK=DARK, MUTED=MUTED, WHITE=WHITE, RED=RED, NBL=NBL,
+)
+
+
+@app.route("/style.css")
+def style_css():
+    return Response(STYLE_CSS, mimetype="text/css")
 
 
 @app.route("/logo.png")
@@ -1521,721 +3373,1402 @@ def logo_png():
     return Response(base64.b64decode(NEFAB_LOGO_B64), mimetype="image/png")
 
 
-# --------------------------------------------------------------------------
-# Routes: Hub
-# --------------------------------------------------------------------------
-@app.route("/")
-@login_required
-def hub():
-    return render_template_string(HUB_TEMPLATE, title="Inicio", active="hub")
+# ── Usuarios y sesión (login + roles admin/usuario) ─────────────────────────
+# Nota: load_users/save_users/load_catalogo/save_catalogo/load_paises_plantas/
+# save_paises_plantas ya estan definidos mas arriba (backend SQLite).
+def get_user_by_id(uid):
+    return next((u for u in load_users() if u["id"] == uid), None)
 
 
-# --------------------------------------------------------------------------
-# Routes: VAS
-# --------------------------------------------------------------------------
-def _vas_filtered_query():
-    mes = request.args.get("mes", "")
-    area = request.args.get("area", "")
-    tarea = request.args.get("tarea", "")
-
-    query = "SELECT * FROM vas_records WHERE 1=1"
-    params = []
-    if mes:
-        query += " AND strftime('%Y-%m', fecha) = ?"
-        params.append(mes)
-    if area:
-        query += " AND area = ?"
-        params.append(area)
-    if tarea:
-        query += " AND tarea = ?"
-        params.append(tarea)
-    query += " ORDER BY fecha DESC, id DESC"
-    return query, params, {"mes": mes, "area": area, "tarea": tarea}
+def get_user_by_email(email):
+    email = (email or "").strip().lower()
+    return next((u for u in load_users() if u["email"].lower() == email), None)
 
 
-@app.route("/vas")
-@login_required
-def vas_list():
-    db = get_db()
-    query, params, filtros = _vas_filtered_query()
-    registros = db.execute(query, params).fetchall()
-
-    total_horas = sum(r["horas"] for r in registros)
-    total_registros = len(registros)
-
-    horas_por_area = {}
-    horas_por_tarea = {}
-    for r in registros:
-        horas_por_area[r["area"]] = horas_por_area.get(r["area"], 0) + r["horas"]
-        horas_por_tarea[r["tarea"]] = horas_por_tarea.get(r["tarea"], 0) + r["horas"]
-
-    top_area = max(horas_por_area, key=horas_por_area.get) if horas_por_area else "-"
-    top_tarea = max(horas_por_tarea, key=horas_por_tarea.get) if horas_por_tarea else "-"
-
-    kpi = {
-        "total_horas": f"{total_horas:.1f}",
-        "total_registros": total_registros,
-        "top_area": top_area,
-        "top_tarea": top_tarea,
-    }
-
-    return render_template_string(
-        VAS_LIST_TEMPLATE, title="VAS",
-        registros=registros, kpi=kpi, filtros=filtros,
-        areas=AREAS_VAS, tareas=TAREAS_VAS,
-        chart_labels=list(horas_por_area.keys()),
-        chart_data=list(horas_por_area.values()),
-        active="vas",
-    )
+def user_initials(email):
+    name_part = (email or "?").split("@")[0]
+    parts = [p for p in name_part.replace(".", " ").replace("_", " ").split() if p]
+    if len(parts) >= 2:
+        return (parts[0][0] + parts[1][0]).upper()
+    return name_part[:2].upper() if name_part else "??"
 
 
-@app.route("/vas/nuevo", methods=["GET", "POST"])
-@login_required
-def vas_new():
+def get_current_user():
+    uid = session.get("user_id")
+    if not uid:
+        return None
+    u = get_user_by_id(uid)
+    if not u:
+        return None
+    return {"id": u["id"], "email": u["email"], "role": u.get("role", "user"), "initials": user_initials(u["email"])}
+
+
+@app.context_processor
+def inject_current_user():
+    return {"current_user": get_current_user(),
+            "project": "seguridad" if request.path.startswith("/seguridad") else "5s"}
+
+
+def gen_id():
+    return f"{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}"
+
+
+def login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not load_users():
+            return redirect(url_for("setup"))
+        if not session.get("user_id") or not get_user_by_id(session["user_id"]):
+            return redirect(url_for("login", next=request.path))
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def admin_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not load_users():
+            return redirect(url_for("setup"))
+        user = get_current_user()
+        if not user:
+            return redirect(url_for("login", next=request.path))
+        if user["role"] != "admin":
+            abort(403)
+        return f(*args, **kwargs)
+    return wrapper
+
+
+@app.route("/setup", methods=["GET", "POST"])
+def setup():
+    if load_users():
+        return redirect(url_for("login"))
+    error = None
     if request.method == "POST":
-        db = get_db()
-        db.execute("""
-            INSERT INTO vas_records (delivery, area, fecha, nombre, wc_bc, horas, tarea, observaciones, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            request.form.get("delivery", "").strip(),
-            request.form["area"],
-            request.form["fecha"],
-            request.form["nombre"].strip(),
-            request.form["wc_bc"],
-            float(request.form["horas"] or 0),
-            request.form["tarea"],
-            request.form.get("observaciones", "").strip(),
-            session.get("username"),
-        ))
-        db.commit()
-        flash("Registro creado correctamente.", "success")
-        return redirect(url_for("vas_list"))
-
-    return render_template_string(
-        VAS_FORM_TEMPLATE, title="Nuevo registro VAS",
-        record=None, areas=AREAS_VAS, wc_bc=WC_BC_OPTIONS, tareas=TAREAS_VAS,
-        today=date.today().isoformat(), active="vas"
-    )
-
-
-@app.route("/vas/editar/<int:record_id>", methods=["GET", "POST"])
-@login_required
-def vas_edit(record_id):
-    db = get_db()
-    record = db.execute("SELECT * FROM vas_records WHERE id = ?", (record_id,)).fetchone()
-    if record is None:
-        flash("Registro no encontrado.", "error")
-        return redirect(url_for("vas_list"))
-
-    if request.method == "POST":
-        db.execute("""
-            UPDATE vas_records
-            SET delivery=?, area=?, fecha=?, nombre=?, wc_bc=?, horas=?, tarea=?, observaciones=?,
-                updated_at=datetime('now')
-            WHERE id=?
-        """, (
-            request.form.get("delivery", "").strip(),
-            request.form["area"],
-            request.form["fecha"],
-            request.form["nombre"].strip(),
-            request.form["wc_bc"],
-            float(request.form["horas"] or 0),
-            request.form["tarea"],
-            request.form.get("observaciones", "").strip(),
-            record_id,
-        ))
-        db.commit()
-        flash("Registro actualizado.", "success")
-        return redirect(url_for("vas_list"))
-
-    return render_template_string(
-        VAS_FORM_TEMPLATE, title="Editar registro VAS",
-        record=record, areas=AREAS_VAS, wc_bc=WC_BC_OPTIONS, tareas=TAREAS_VAS,
-        today=date.today().isoformat(), active="vas"
-    )
-
-
-@app.route("/vas/eliminar/<int:record_id>", methods=["POST"])
-@login_required
-def vas_delete(record_id):
-    db = get_db()
-    db.execute("DELETE FROM vas_records WHERE id = ?", (record_id,))
-    db.commit()
-    flash("Registro eliminado.", "success")
-    return redirect(url_for("vas_list"))
-
-
-@app.route("/vas/exportar")
-@login_required
-def vas_export():
-    db = get_db()
-    query, params, _ = _vas_filtered_query()
-    registros = db.execute(query, params).fetchall()
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "VAS"
-
-    headers = ["Fecha", "Delivery", "Área", "Nombre", "WC/BC", "Horas", "Tarea", "Observaciones"]
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF", name="Arial")
-        cell.fill = PatternFill("solid", fgColor="144E8C")
-        cell.alignment = Alignment(horizontal="center")
-
-    for r in registros:
-        ws.append([r["fecha"], r["delivery"], r["area"], r["nombre"], r["wc_bc"],
-                   r["horas"], r["tarea"], r["observaciones"]])
-
-    for col in ws.columns:
-        max_len = max(len(str(c.value)) if c.value else 0 for c in col)
-        ws.column_dimensions[col[0].column_letter].width = min(max(max_len + 2, 10), 45)
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    fname = f"VAS_export_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-    return send_file(buf, as_attachment=True, download_name=fname,
-                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-
-# --------------------------------------------------------------------------
-# Routes: Inventario
-# --------------------------------------------------------------------------
-def _stock_actual(db, material_id):
-    row = db.execute("""
-        SELECT
-          COALESCE(SUM(CASE WHEN tipo='Entrada' THEN cantidad ELSE 0 END), 0) -
-          COALESCE(SUM(CASE WHEN tipo='Salida' THEN cantidad ELSE 0 END), 0) AS stock
-        FROM movimientos_inventario WHERE material_id = ?
-    """, (material_id,)).fetchone()
-    return row["stock"] or 0
-
-
-@app.route("/inventario")
-@login_required
-def inv_dashboard():
-    db = get_db()
-    materiales_raw = db.execute(
-        "SELECT * FROM materiales WHERE activo = 1 ORDER BY categoria, nombre"
-    ).fetchall()
-
-    materiales = []
-    bajo_minimo = 0
-    for m in materiales_raw:
-        stock = _stock_actual(db, m["id"])
-        d = dict(m)
-        d["stock_actual"] = stock
-        if stock < m["stock_minimo"]:
-            bajo_minimo += 1
-        materiales.append(d)
-
-    movs_mes = db.execute(
-        "SELECT COUNT(*) AS c FROM movimientos_inventario WHERE strftime('%Y-%m', fecha) = strftime('%Y-%m', 'now')"
-    ).fetchone()["c"]
-
-    kpi = {
-        "total_materiales": len(materiales),
-        "bajo_minimo": bajo_minimo,
-        "movs_mes": movs_mes,
-    }
-
-    return render_template_string(INV_DASHBOARD_TEMPLATE, title="Inventario",
-                                   materiales=materiales, kpi=kpi, active="inv")
-
-
-@app.route("/inventario/material/nuevo", methods=["GET", "POST"])
-@login_required
-def inv_material_new():
-    if request.method == "POST":
-        db = get_db()
-        try:
-            db.execute("""
-                INSERT INTO materiales (codigo, nombre, categoria, unidad, stock_minimo)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                request.form["codigo"].strip(),
-                request.form["nombre"].strip(),
-                request.form["categoria"],
-                request.form["unidad"],
-                float(request.form["stock_minimo"] or 0),
-            ))
-            db.commit()
-            flash("Material creado correctamente.", "success")
-            return redirect(url_for("inv_dashboard"))
-        except sqlite3.IntegrityError:
-            flash("Ya existe un material con ese código.", "error")
-
-    return render_template_string(INV_MATERIAL_FORM_TEMPLATE, title="Nuevo material",
-                                   material=None, categorias=CATEGORIAS_MATERIAL,
-                                   unidades=UNIDADES_MEDIDA, active="inv")
-
-
-@app.route("/inventario/material/editar/<int:material_id>", methods=["GET", "POST"])
-@login_required
-def inv_material_edit(material_id):
-    db = get_db()
-    material = db.execute("SELECT * FROM materiales WHERE id = ?", (material_id,)).fetchone()
-    if material is None:
-        flash("Material no encontrado.", "error")
-        return redirect(url_for("inv_dashboard"))
-
-    if request.method == "POST":
-        try:
-            db.execute("""
-                UPDATE materiales SET codigo=?, nombre=?, categoria=?, unidad=?, stock_minimo=?
-                WHERE id=?
-            """, (
-                request.form["codigo"].strip(),
-                request.form["nombre"].strip(),
-                request.form["categoria"],
-                request.form["unidad"],
-                float(request.form["stock_minimo"] or 0),
-                material_id,
-            ))
-            db.commit()
-            flash("Material actualizado.", "success")
-            return redirect(url_for("inv_dashboard"))
-        except sqlite3.IntegrityError:
-            flash("Ya existe un material con ese código.", "error")
-
-    return render_template_string(INV_MATERIAL_FORM_TEMPLATE, title="Editar material",
-                                   material=material, categorias=CATEGORIAS_MATERIAL,
-                                   unidades=UNIDADES_MEDIDA, active="inv")
-
-
-@app.route("/inventario/movimiento/nuevo", methods=["GET", "POST"])
-@login_required
-def inv_mov_new():
-    db = get_db()
-    materiales = db.execute(
-        "SELECT * FROM materiales WHERE activo = 1 ORDER BY categoria, nombre"
-    ).fetchall()
-
-    if request.method == "POST":
-        material_id = request.form.get("material_id")
-        if not material_id:
-            flash("Debes seleccionar un material.", "error")
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        if not email or "@" not in email:
+            error = "Ingresa un correo válido."
+        elif len(password) < 6:
+            error = "La contraseña debe tener al menos 6 caracteres."
         else:
-            db.execute("""
-                INSERT INTO movimientos_inventario
-                    (material_id, tipo, cantidad, lote_ot, delivery, fecha, responsable, observaciones, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                material_id,
-                request.form["tipo"],
-                float(request.form["cantidad"]),
-                request.form.get("lote_ot", "").strip(),
-                request.form.get("delivery", "").strip(),
-                request.form["fecha"],
-                request.form.get("responsable", "").strip(),
-                request.form.get("observaciones", "").strip(),
-                session.get("username"),
-            ))
-            db.commit()
-            flash("Movimiento registrado.", "success")
-            return redirect(url_for("inv_dashboard"))
-
-    return render_template_string(INV_MOV_FORM_TEMPLATE, title="Nuevo movimiento",
-                                   materiales=materiales, tipos=TIPOS_MOVIMIENTO,
-                                   today=date.today().isoformat(), active="inv")
+            users = [{
+                "id": gen_id(), "email": email,
+                "password_hash": generate_password_hash(password),
+                "role": "admin",
+            }]
+            save_users(users)
+            session["user_id"] = users[0]["id"]
+            return redirect(url_for("plantas_list"))
+    return render_template("setup.html", error=error)
 
 
-@app.route("/inventario/kardex")
-@login_required
-def inv_kardex():
-    db = get_db()
-    material_id = request.args.get("material_id", "")
-    lote_ot = request.args.get("lote_ot", "")
-    delivery = request.args.get("delivery", "")
-
-    query = """
-        SELECT mv.*, ma.codigo, ma.nombre
-        FROM movimientos_inventario mv
-        JOIN materiales ma ON ma.id = mv.material_id
-        WHERE 1=1
-    """
-    params = []
-    if material_id:
-        query += " AND mv.material_id = ?"
-        params.append(material_id)
-    if lote_ot:
-        query += " AND mv.lote_ot LIKE ?"
-        params.append(f"%{lote_ot}%")
-    if delivery:
-        query += " AND mv.delivery LIKE ?"
-        params.append(f"%{delivery}%")
-    query += " ORDER BY mv.fecha DESC, mv.id DESC"
-
-    movimientos = db.execute(query, params).fetchall()
-    materiales = db.execute("SELECT * FROM materiales ORDER BY categoria, nombre").fetchall()
-
-    return render_template_string(INV_KARDEX_TEMPLATE, title="Kardex",
-                                   movimientos=movimientos, materiales=materiales,
-                                   filtros={"material_id": material_id, "lote_ot": lote_ot, "delivery": delivery},
-                                   active="inv")
-
-
-@app.route("/inventario/exportar")
-@login_required
-def inv_export():
-    db = get_db()
-    materiales_raw = db.execute(
-        "SELECT * FROM materiales WHERE activo = 1 ORDER BY categoria, nombre"
-    ).fetchall()
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Stock"
-
-    headers = ["Código", "Nombre", "Categoría", "Unidad", "Stock actual", "Stock mínimo", "Estado"]
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF", name="Arial")
-        cell.fill = PatternFill("solid", fgColor="144E8C")
-        cell.alignment = Alignment(horizontal="center")
-
-    for m in materiales_raw:
-        stock = _stock_actual(db, m["id"])
-        estado = "Bajo mínimo" if stock < m["stock_minimo"] else "OK"
-        ws.append([m["codigo"], m["nombre"], m["categoria"], m["unidad"],
-                   stock, m["stock_minimo"], estado])
-
-    for col in ws.columns:
-        max_len = max(len(str(c.value)) if c.value else 0 for c in col)
-        ws.column_dimensions[col[0].column_letter].width = min(max(max_len + 2, 10), 40)
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    fname = f"Inventario_stock_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-    return send_file(buf, as_attachment=True, download_name=fname,
-                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-
-# --------------------------------------------------------------------------
-# Routes: Calidad
-# --------------------------------------------------------------------------
-def _calidad_filtered_query():
-    tipo = request.args.get("tipo", "")
-    estado = request.args.get("estado", "")
-    cliente = request.args.get("cliente", "")
-    buscar = request.args.get("buscar", "")
-
-    query = "SELECT * FROM calidad_registros WHERE 1=1"
-    params = []
-    if tipo:
-        query += " AND tipo = ?"
-        params.append(tipo)
-    if estado:
-        query += " AND estado = ?"
-        params.append(estado)
-    if cliente:
-        query += " AND cliente LIKE ?"
-        params.append(f"%{cliente}%")
-    if buscar:
-        query += " AND (delivery LIKE ? OR guia LIKE ? OR rdel LIKE ?)"
-        params.append(f"%{buscar}%")
-        params.append(f"%{buscar}%")
-        params.append(f"%{buscar}%")
-    query += " ORDER BY fecha DESC, id DESC"
-    return query, params, {"tipo": tipo, "estado": estado, "cliente": cliente, "buscar": buscar}
-
-
-@app.route("/calidad")
-@login_required
-def calidad_list():
-    db = get_db()
-    query, params, filtros = _calidad_filtered_query()
-    registros = db.execute(query, params).fetchall()
-
-    total = len(registros)
-    pendientes = sum(1 for r in registros if r["estado"] in ("Pendiente", "En proceso"))
-    cerrados = sum(1 for r in registros if r["estado"] in ("Cerrado", "Aprobado"))
-
-    por_tipo = {}
-    for r in registros:
-        por_tipo[r["tipo"]] = por_tipo.get(r["tipo"], 0) + 1
-    top_tipo = max(por_tipo, key=por_tipo.get) if por_tipo else "-"
-
-    kpi = {"total": total, "pendientes": pendientes, "cerrados": cerrados, "top_tipo": top_tipo}
-
-    return render_template_string(
-        CALIDAD_LIST_TEMPLATE, title="Calidad",
-        registros=registros, kpi=kpi, filtros=filtros,
-        tipos=TIPOS_CALIDAD, estados=ESTADOS_CALIDAD,
-        chart_labels=list(por_tipo.keys()), chart_data=list(por_tipo.values()),
-        active="calidad",
-    )
-
-
-def _calidad_form_values():
-    def to_float(key):
-        val = request.form.get(key, "").strip()
-        return float(val) if val else None
-
-    return (
-        request.form["tipo"],
-        request.form["fecha"],
-        request.form.get("guia", "").strip(),
-        request.form.get("delivery", "").strip(),
-        request.form.get("cliente", "").strip(),
-        request.form.get("item", "").strip(),
-        request.form.get("descripcion_material", "").strip(),
-        to_float("cantidad"),
-        request.form.get("ubicacion", "").strip(),
-        to_float("cantidad_sistema"),
-        to_float("cantidad_fisica"),
-        to_float("peso_kg"),
-        request.form.get("proceso", "").strip(),
-        request.form.get("rdel", "").strip(),
-        request.form.get("motivo", "").strip(),
-        request.form.get("causa_raiz", "").strip(),
-        request.form.get("acciones_correctivas", "").strip(),
-        request.form.get("responsable", "").strip(),
-        request.form["estado"],
-        request.form.get("observaciones", "").strip(),
-    )
-
-
-def _calidad_header_values():
-    """Campos comunes a todos los ítems de un mismo caso (todo excepto item/descripcion/cantidad)."""
-    def to_float(key):
-        val = request.form.get(key, "").strip()
-        return float(val) if val else None
-
-    return {
-        "tipo": request.form["tipo"],
-        "fecha": request.form["fecha"],
-        "guia": request.form.get("guia", "").strip(),
-        "delivery": request.form.get("delivery", "").strip(),
-        "cliente": request.form.get("cliente", "").strip(),
-        "ubicacion": request.form.get("ubicacion", "").strip(),
-        "cantidad_sistema": to_float("cantidad_sistema"),
-        "cantidad_fisica": to_float("cantidad_fisica"),
-        "peso_kg": to_float("peso_kg"),
-        "proceso": request.form.get("proceso", "").strip(),
-        "rdel": request.form.get("rdel", "").strip(),
-        "motivo": request.form.get("motivo", "").strip(),
-        "causa_raiz": request.form.get("causa_raiz", "").strip(),
-        "acciones_correctivas": request.form.get("acciones_correctivas", "").strip(),
-        "responsable": request.form.get("responsable", "").strip(),
-        "estado": request.form["estado"],
-        "observaciones": request.form.get("observaciones", "").strip(),
-    }
-
-
-@app.route("/calidad/nuevo", methods=["GET", "POST"])
-@login_required
-def calidad_new():
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not load_users():
+        return redirect(url_for("setup"))
+    error = None
     if request.method == "POST":
-        db = get_db()
-        header = _calidad_header_values()
-
-        items = request.form.getlist("item[]")
-        descripciones = request.form.getlist("descripcion_material[]")
-        cantidades = request.form.getlist("cantidad[]")
-
-        filas_creadas = 0
-        for i in range(len(items)):
-            item = items[i].strip()
-            descripcion = descripciones[i].strip() if i < len(descripciones) else ""
-            cantidad_raw = cantidades[i].strip() if i < len(cantidades) else ""
-            if not item and not descripcion and not cantidad_raw:
-                continue  # fila vacia, se omite
-            cantidad = float(cantidad_raw) if cantidad_raw else None
-
-            db.execute("""
-                INSERT INTO calidad_registros
-                    (tipo, fecha, guia, delivery, cliente, item, descripcion_material, cantidad,
-                     ubicacion, cantidad_sistema, cantidad_fisica, peso_kg, proceso, rdel, motivo, causa_raiz,
-                     acciones_correctivas, responsable, estado, observaciones, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                header["tipo"], header["fecha"], header["guia"], header["delivery"], header["cliente"],
-                item, descripcion, cantidad,
-                header["ubicacion"], header["cantidad_sistema"], header["cantidad_fisica"],
-                header["peso_kg"], header["proceso"], header["rdel"],
-                header["motivo"], header["causa_raiz"], header["acciones_correctivas"],
-                header["responsable"], header["estado"], header["observaciones"],
-                session.get("username"),
-            ))
-            filas_creadas += 1
-
-        if filas_creadas == 0:
-            # Sin ninguna fila de item con datos: igual guarda un registro con el caso general
-            db.execute("""
-                INSERT INTO calidad_registros
-                    (tipo, fecha, guia, delivery, cliente, item, descripcion_material, cantidad,
-                     ubicacion, cantidad_sistema, cantidad_fisica, peso_kg, proceso, rdel, motivo, causa_raiz,
-                     acciones_correctivas, responsable, estado, observaciones, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                header["tipo"], header["fecha"], header["guia"], header["delivery"], header["cliente"],
-                "", "", None,
-                header["ubicacion"], header["cantidad_sistema"], header["cantidad_fisica"],
-                header["peso_kg"], header["proceso"], header["rdel"],
-                header["motivo"], header["causa_raiz"], header["acciones_correctivas"],
-                header["responsable"], header["estado"], header["observaciones"],
-                session.get("username"),
-            ))
-            filas_creadas = 1
-
-        db.commit()
-        if filas_creadas > 1:
-            flash(f"{filas_creadas} registros creados correctamente (uno por ítem).", "success")
-        else:
-            flash("Registro de Calidad creado correctamente.", "success")
-        return redirect(url_for("calidad_list"))
-
-    return render_template_string(
-        CALIDAD_FORM_TEMPLATE, title="Nuevo registro de Calidad",
-        record=None, tipos=TIPOS_CALIDAD, estados=ESTADOS_CALIDAD,
-        today=date.today().isoformat(), active="calidad",
-    )
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        user = get_user_by_email(email)
+        if user and check_password_hash(user["password_hash"], password):
+            session["user_id"] = user["id"]
+            next_url = request.args.get("next") or url_for("plantas_list")
+            return redirect(next_url)
+        error = "Correo o contraseña incorrectos."
+    return render_template("login.html", error=error)
 
 
-@app.route("/calidad/editar/<int:record_id>", methods=["GET", "POST"])
-@login_required
-def calidad_edit(record_id):
-    db = get_db()
-    record = db.execute("SELECT * FROM calidad_registros WHERE id = ?", (record_id,)).fetchone()
-    if record is None:
-        flash("Registro no encontrado.", "error")
-        return redirect(url_for("calidad_list"))
-
-    if request.method == "POST":
-        values = _calidad_form_values()
-        db.execute("""
-            UPDATE calidad_registros
-            SET tipo=?, fecha=?, guia=?, delivery=?, cliente=?, item=?, descripcion_material=?,
-                cantidad=?, ubicacion=?, cantidad_sistema=?, cantidad_fisica=?, peso_kg=?, proceso=?, rdel=?,
-                motivo=?, causa_raiz=?, acciones_correctivas=?, responsable=?, estado=?, observaciones=?,
-                updated_at=datetime('now')
-            WHERE id=?
-        """, values + (record_id,))
-        db.commit()
-        flash("Registro actualizado.", "success")
-        return redirect(url_for("calidad_list"))
-
-    return render_template_string(
-        CALIDAD_FORM_TEMPLATE, title="Editar registro de Calidad",
-        record=record, tipos=TIPOS_CALIDAD, estados=ESTADOS_CALIDAD,
-        today=date.today().isoformat(), active="calidad",
-    )
+@app.route("/logout")
+def logout():
+    session.pop("user_id", None)
+    return redirect(url_for("login"))
 
 
-@app.route("/calidad/eliminar/<int:record_id>", methods=["POST"])
-@login_required
-def calidad_delete(record_id):
-    db = get_db()
-    db.execute("DELETE FROM calidad_registros WHERE id = ?", (record_id,))
-    db.commit()
-    flash("Registro eliminado.", "success")
-    return redirect(url_for("calidad_list"))
-
-
-@app.route("/calidad/exportar")
-@login_required
-def calidad_export():
-    db = get_db()
-    query, params, _ = _calidad_filtered_query()
-    registros = db.execute(query, params).fetchall()
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Calidad"
-
-    headers = ["Fecha", "Tipo", "Guía", "Delivery", "RDEL", "Cliente", "Ítem", "Descripción material",
-               "Cantidad", "Ubicación", "Cant. sistema", "Cant. física", "Peso (kg)", "Proceso",
-               "Motivo", "Causa raíz", "Acciones correctivas", "Responsable", "Estado", "Observaciones"]
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF", name="Arial")
-        cell.fill = PatternFill("solid", fgColor="144E8C")
-        cell.alignment = Alignment(horizontal="center")
-
-    for r in registros:
-        ws.append([r["fecha"], r["tipo"], r["guia"], r["delivery"], r["rdel"], r["cliente"], r["item"],
-                   r["descripcion_material"], r["cantidad"], r["ubicacion"], r["cantidad_sistema"],
-                   r["cantidad_fisica"], r["peso_kg"], r["proceso"], r["motivo"], r["causa_raiz"],
-                   r["acciones_correctivas"], r["responsable"], r["estado"], r["observaciones"]])
-
-    for col in ws.columns:
-        max_len = max(len(str(c.value)) if c.value else 0 for c in col)
-        ws.column_dimensions[col[0].column_letter].width = min(max(max_len + 2, 10), 45)
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    fname = f"Calidad_export_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-    return send_file(buf, as_attachment=True, download_name=fname,
-                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-
-# --------------------------------------------------------------------------
-# Routes: Admin - Usuarios
-# --------------------------------------------------------------------------
-@app.route("/admin/usuarios")
+@app.route("/admin/users")
 @admin_required
 def admin_users():
-    db = get_db()
-    usuarios = db.execute("SELECT * FROM users ORDER BY created_at").fetchall()
-    return render_template_string(ADMIN_USERS_TEMPLATE, title="Usuarios",
-                                   usuarios=usuarios, active="users")
+    return render_template("admin_users.html", users=load_users(), current=get_current_user())
 
 
-@app.route("/admin/usuarios/nuevo", methods=["POST"])
+@app.route("/admin/users/new", methods=["GET", "POST"])
 @admin_required
-def admin_users_new():
-    db = get_db()
-    username = request.form.get("username", "").strip()
-    password = request.form.get("password", "")
-    role = request.form.get("role", "user")
+def admin_user_new():
+    error = None
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        role = request.form.get("role", "user")
+        role = role if role in ("admin", "user") else "user"
+        if not email or "@" not in email:
+            error = "Ingresa un correo válido."
+        elif len(password) < 6:
+            error = "La contraseña debe tener al menos 6 caracteres."
+        elif get_user_by_email(email):
+            error = "Ya existe un usuario con ese correo."
+        else:
+            users = load_users()
+            users.append({
+                "id": gen_id(), "email": email,
+                "password_hash": generate_password_hash(password),
+                "role": role,
+            })
+            save_users(users)
+            return redirect(url_for("admin_users"))
+    return render_template("admin_user_form.html", error=error)
 
-    if not username or not password:
-        flash("Usuario y contraseña son obligatorios.", "error")
-        return redirect(url_for("admin_users"))
+
+@app.route("/admin/users/<uid>/delete", methods=["POST"])
+@admin_required
+def admin_user_delete(uid):
+    users = load_users()
+    target = next((u for u in users if u["id"] == uid), None)
+    if target:
+        admins_left = sum(1 for u in users if u.get("role") == "admin" and u["id"] != uid)
+        if target.get("role") == "admin" and admins_left == 0:
+            return redirect(url_for("admin_users"))
+        if target["id"] == session.get("user_id"):
+            return redirect(url_for("admin_users"))
+        users = [u for u in users if u["id"] != uid]
+        save_users(users)
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/set_lang/<lang>")
+def set_lang(lang):
+    session["lang"] = lang if lang in ("es", "en", "pt") else "es"
+    return redirect(request.referrer or url_for("plantas_list"))
+
+
+# ── Nota: load_plantas/get_planta_dict/create_planta_db/etc. ya estan
+# definidos mas arriba (backend SQLite).
+def all_hallazgos_flat():
+    """Aplana los hallazgos de todas las plantas en una sola lista, con
+    pais/planta/planta_id agregados, para el Cronograma global."""
+    out = []
+    for p in load_plantas():
+        for idx, h in enumerate(p.get("hallazgos", [])):
+            item = dict(h)
+            item["planta_id"] = p["id"]
+            item["planta_name"] = p.get("name", "")
+            item["pais"] = p.get("pais", "")
+            item["_idx"] = idx
+            out.append(item)
+    return out
+
+
+def get_planta_or_404(pid):
+    p = get_planta_dict(pid)
+    if not p:
+        abort(404)
+    return None, p
+
+
+def to_num(v):
+    try:
+        return float(str(v).replace(",", "."))
+    except Exception:
+        return 0.0
+
+
+def audit_avg(a):
+    """Compatibilidad: si la auditoria tiene 'pct_total' (checklist nuevo) lo
+    usa; si no, calcula desde 'respuestas' directamente."""
+    if "pct_total" in a:
+        return round(to_num(a.get("pct_total")), 1)
+    respuestas = a.get("respuestas", [])
+    if not respuestas:
+        return 0.0
+    return round(sum(respuestas) / len(respuestas) * 100, 1)
+
+
+def clasificacion_pct(pct):
+    if pct >= 80:
+        return "Bueno"
+    if pct >= 60:
+        return "Regular"
+    return "Bajo"
+
+
+CLASIFICACION_LABEL = {
+    "Bueno": "🟢 BUENO", "Regular": "🟡 REGULAR", "Bajo": "🔴 BAJO",
+}
+CLASIFICACION_COLOR = {"Bueno": NG, "Regular": "#FDD835", "Bajo": RED}
+
+
+def compute_auditoria(respuestas, area, auditor, fecha, notes=""):
+    """Dado un checklist de 10 respuestas (0/1), calcula pct_total y pct por
+    fase, exactamente igual que la app de escritorio."""
+    total_pts = sum(respuestas)
+    pct_total = round(total_pts / len(respuestas) * 100, 1) if respuestas else 0.0
+    pcts = {}
+    for fase, idxs in FASES_MAP_IDX.items():
+        vals = [respuestas[i] for i in idxs if i < len(respuestas)]
+        pcts[fase] = round(sum(vals) / len(vals) * 100, 1) if vals else 0.0
+    item = {
+        "fecha": fecha, "area": area, "auditor": auditor,
+        "pct_total": pct_total, "respuestas": respuestas, "notes": notes,
+    }
+    for f, v in pcts.items():
+        item[f"pct_{f}"] = v
+    item["clasificacion"] = clasificacion_pct(pct_total)
+    return item
+
+
+def planta_stats(p):
+    """KPIs del dashboard + desgloses para los 3 paneles equivalentes a los
+    donuts de la app de escritorio: resultados de auditoria (Bueno/Regular/
+    Bajo), hallazgos por fase, y estado de hallazgos."""
+    auditorias = p.get("auditorias", [])
+    hallazgos = p.get("hallazgos", [])
+
+    if auditorias:
+        promedio = round(sum(audit_avg(a) for a in auditorias) / len(auditorias), 1)
+        ultima = auditorias[-1]
+        pilares = {pil: to_num(ultima.get(f"pct_{pil}", 0)) for pil in PILLARS}
+    else:
+        promedio = 0.0
+        pilares = {pil: 0.0 for pil in PILLARS}
+
+    resultado_counts = {"Bueno": 0, "Regular": 0, "Bajo": 0}
+    for a in auditorias:
+        clas = a.get("clasificacion") or clasificacion_pct(audit_avg(a))
+        resultado_counts[clas] = resultado_counts.get(clas, 0) + 1
+
+    fase_counts = {f: 0 for f in FASES}
+    for h in hallazgos:
+        fase = h.get("fase", "")
+        if fase in fase_counts:
+            fase_counts[fase] += 1
+
+    estado_counts = {"Abierto": 0, "En progreso": 0, "Cerrado": 0}
+    for h in hallazgos:
+        est = h.get("status", "Abierto")
+        estado_counts[est] = estado_counts.get(est, 0) + 1
+
+    abiertos = sum(1 for h in hallazgos if h.get("status") != "Cerrado")
+    cerrados = sum(1 for h in hallazgos if h.get("status") == "Cerrado")
+    return {
+        "promedio": promedio, "num_auditorias": len(auditorias),
+        "abiertos": abiertos, "cerrados": cerrados, "total_hallazgos": len(hallazgos),
+        "pilares": pilares, "resultado_counts": resultado_counts,
+        "fase_counts": fase_counts, "estado_counts": estado_counts,
+    }
+
+
+app.jinja_env.globals.update(
+    audit_avg=audit_avg, clasificacion_pct=clasificacion_pct,
+    CLASIFICACION_LABEL=CLASIFICACION_LABEL, CLASIFICACION_COLOR=CLASIFICACION_COLOR,
+)
+
+
+# ── Lista de plantas ─────────────────────────────────────────────────────
+@app.route("/")
+@login_required
+def plantas_list():
+    plantas = load_plantas()
+    area_filter = request.args.get("area", "Todos")
+    total = len(plantas)
+    n_log = sum(1 for p in plantas if p.get("area", "Logística") == "Logística")
+    n_man = sum(1 for p in plantas if p.get("area", "Logística") == "Manufactura")
+    visible = [
+        p for p in reversed(plantas)
+        if area_filter == "Todos" or p.get("area", "Logística") == area_filter
+    ]
+    for p in visible:
+        auditorias = p.get("auditorias", [])
+        p["_num_auditorias"] = len(auditorias)
+        p["_promedio"] = round(sum(audit_avg(a) for a in auditorias) / len(auditorias), 1) if auditorias else 0.0
+    return render_template(
+        "plantas_list.html", plantas=visible, area_filter=area_filter,
+        total=total, n_log=n_log, n_man=n_man,
+    )
+
+
+@app.route("/planta/new", methods=["GET", "POST"])
+@login_required
+def new_planta_view():
+    if request.method == "POST":
+        areas_raw = request.form.get("areas", "").strip()
+        areas_list = [a.strip() for a in areas_raw.split(",") if a.strip()]
+        pid = create_planta_db(
+            request.form.get("name", "").strip(),
+            request.form.get("site", "").strip(),
+            request.form.get("customer", "").strip(),
+            request.form.get("owner", "").strip(),
+            request.form.get("problem", "").strip(),
+            area=request.form.get("area", "Logística"),
+            pais=request.form.get("pais", "").strip(),
+            areas=areas_list,
+        )
+        return redirect(url_for("planta_overview", pid=pid))
+    return render_template("planta_form.html", old={}, registro=load_paises_plantas())
+
+
+@app.route("/planta/<pid>/edit", methods=["GET", "POST"])
+@login_required
+def edit_planta_view(pid):
+    _, p = get_planta_or_404(pid)
+    if request.method == "POST":
+        areas_raw = request.form.get("areas", "").strip()
+        areas_list = [a.strip() for a in areas_raw.split(",") if a.strip()]
+        update_planta_db(
+            pid,
+            request.form.get("name", "").strip() or p["name"],
+            request.form.get("site", "").strip(),
+            request.form.get("customer", "").strip(),
+            request.form.get("owner", "").strip(),
+            request.form.get("problem", "").strip(),
+            request.form.get("area", p.get("area", "Logística")),
+            request.form.get("pais", "").strip(),
+            areas_list,
+        )
+        return redirect(url_for("planta_overview", pid=pid))
+    return render_template("planta_form.html", old=p, registro=load_paises_plantas())
+
+
+@app.route("/planta/<pid>/delete", methods=["POST"])
+@login_required
+def delete_planta(pid):
+    delete_planta_db(pid)
+    try:
+        import shutil
+        shutil.rmtree(PHOTOS_DIR / pid, ignore_errors=True)
+    except Exception:
+        pass
+    return redirect(url_for("plantas_list"))
+
+
+@app.route("/planta/<pid>")
+@login_required
+def planta_home(pid):
+    return redirect(url_for("planta_overview", pid=pid))
+
+
+@app.route("/planta/<pid>/overview")
+@login_required
+def planta_overview(pid):
+    _, p = get_planta_or_404(pid)
+    stats = planta_stats(p)
+    return render_template("planta_overview.html", p=p, stats=stats, active="Inicio")
+
+
+# ── Auditorías 5S ────────────────────────────────────────────────────────
+@app.route("/planta/<pid>/auditorias")
+@login_required
+def planta_auditorias(pid):
+    _, p = get_planta_or_404(pid)
+    return render_template("planta_auditorias.html", p=p, active="Auditorías")
+
+
+@app.route("/planta/<pid>/auditorias/save", methods=["GET", "POST"])
+@login_required
+def auditoria_form(pid):
+    _, p = get_planta_or_404(pid)
+    idx = request.args.get("idx", type=int)
+    old = p["auditorias"][idx] if idx is not None and 0 <= idx < len(p["auditorias"]) else {}
+    if request.method == "POST":
+        respuestas = []
+        for i in range(len(PREGUNTAS)):
+            respuestas.append(1 if request.form.get(f"q{i}") == "1" else 0)
+        item = compute_auditoria(
+            respuestas,
+            area=request.form.get("area", "").strip(),
+            auditor=request.form.get("auditor", "").strip(),
+            fecha=request.form.get("date", "").strip() or date.today().isoformat(),
+            notes=request.form.get("notes", "").strip(),
+        )
+        if idx is not None and old.get("evidencia"):
+            item["evidencia"] = old["evidencia"]
+
+        file = request.files.get("photo_camera") or request.files.get("photo_gallery") or request.files.get("photo")
+        if file and file.filename:
+            ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+            if ext in ALLOWED_PHOTO_EXT:
+                unique_name = secure_filename(f"audit_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}.{ext}")
+                blob = file.read()
+                item["evidencia"] = unique_name
+                add_evidence_db(pid, unique_name, f"Auditoría {item['fecha']} — {item.get('area','')}",
+                                 date.today().isoformat(), blob, file.mimetype)
+
+        if idx is not None:
+            update_auditoria_db(pid, idx, item)
+        else:
+            add_auditoria_db(pid, item)
+        return redirect(url_for("planta_auditorias", pid=pid))
+    return render_template("auditoria_form.html", p=p, old=old, idx=idx)
+
+
+@app.route("/planta/<pid>/auditorias/<int:idx>/delete", methods=["POST"])
+@login_required
+def auditoria_delete(pid, idx):
+    delete_auditoria_db(pid, idx)
+    return redirect(url_for("planta_auditorias", pid=pid))
+
+
+# ── Hallazgos 5S ─────────────────────────────────────────────────────────
+@app.route("/planta/<pid>/hallazgos")
+@login_required
+def planta_hallazgos(pid):
+    _, p = get_planta_or_404(pid)
+    return render_template("planta_hallazgos.html", p=p, active="Hallazgos")
+
+
+@app.route("/planta/<pid>/hallazgos/save", methods=["GET", "POST"])
+@login_required
+def hallazgo_form(pid):
+    _, p = get_planta_or_404(pid)
+    idx = request.args.get("idx", type=int)
+    old = p["hallazgos"][idx] if idx is not None and 0 <= idx < len(p["hallazgos"]) else {}
+    if request.method == "POST":
+        item = {
+            "date": request.form.get("date", "").strip(),
+            "area": request.form.get("area", "").strip(),
+            "pillar": request.form.get("pillar", FASES[0]),
+            "description": request.form.get("description", "").strip(),
+            "severity": request.form.get("severity", SEVERITIES[0]),
+            "status": request.form.get("status", FINDING_STATUSES[0]),
+            "corrective_action": request.form.get("corrective_action", "").strip(),
+            "responsible": request.form.get("responsible", "").strip(),
+            "due_date": request.form.get("due_date", "").strip(),
+        }
+        if not item["area"]:
+            return render_template("hallazgo_form.html", p=p, old=item, idx=idx, error=True, catalogo=load_catalogo())
+        if idx is not None and old.get("evidencia"):
+            item["evidencia"] = old["evidencia"]
+
+        file = request.files.get("photo_camera") or request.files.get("photo_gallery") or request.files.get("photo")
+        if file and file.filename:
+            ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+            if ext in ALLOWED_PHOTO_EXT:
+                unique_name = secure_filename(f"hallazgo_{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}.{ext}")
+                blob = file.read()
+                item["evidencia"] = unique_name
+                add_evidence_db(pid, unique_name,
+                                 f"Hallazgo — {item.get('area','')}: {item.get('description','')[:60]}",
+                                 date.today().isoformat(), blob, file.mimetype)
+
+        if idx is not None:
+            update_hallazgo_db(pid, idx, item)
+        else:
+            add_hallazgo_db(pid, item)
+        return redirect(url_for("planta_hallazgos", pid=pid))
+    return render_template("hallazgo_form.html", p=p, old=old, idx=idx, error=False, catalogo=load_catalogo())
+
+
+@app.route("/planta/<pid>/hallazgos/<int:idx>/delete", methods=["POST"])
+@login_required
+def hallazgo_delete(pid, idx):
+    delete_hallazgo_db(pid, idx)
+    return redirect(url_for("planta_hallazgos", pid=pid))
+
+
+@app.route("/planta/<pid>/hallazgos/<int:idx>/close", methods=["POST"])
+@login_required
+def hallazgo_close(pid, idx):
+    close_hallazgo_db(pid, idx)
+    return redirect(url_for("planta_hallazgos", pid=pid))
+
+
+@app.route("/planta/<pid>/hallazgos/bulk_delete", methods=["POST"])
+@login_required
+def hallazgos_bulk_delete(pid):
+    idxs = {int(i) for i in request.form.getlist("idx")}
+    bulk_delete_hallazgos_db(pid, idxs)
+    return redirect(url_for("planta_hallazgos", pid=pid))
+
+
+# ── Catálogo global de posibilidades (compartido entre todas las plantas) ──
+@app.route("/cronograma")
+@login_required
+def cronograma_view():
+    hallazgos = all_hallazgos_flat()
+
+    paises = sorted({h.get("pais", "") for h in hallazgos if h.get("pais")})
+
+    pais_f = request.args.get("pais", "")
+    estado_f = request.args.get("estado", "")
+    fase_f = request.args.get("fase", "")
+    hoy = date.today()
+    date_from_s = request.args.get("date_from", "") or (hoy - timedelta(days=28)).isoformat()
+    date_to_s = request.args.get("date_to", "") or hoy.isoformat()
 
     try:
-        db.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-            (username, generate_password_hash(password), role)
+        date_from = datetime.strptime(date_from_s, "%Y-%m-%d").date()
+    except Exception:
+        date_from = hoy - timedelta(days=28)
+    try:
+        date_to = datetime.strptime(date_to_s, "%Y-%m-%d").date()
+    except Exception:
+        date_to = hoy
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+
+    filtered = []
+    for h in hallazgos:
+        if pais_f and h.get("pais") != pais_f:
+            continue
+        if estado_f and h.get("status") != estado_f:
+            continue
+        if fase_f and h.get("pillar") != fase_f:
+            continue
+        h_date_s = h.get("date", "")
+        try:
+            h_date = datetime.strptime(h_date_s, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if h_date < date_from or h_date > date_to:
+            continue
+        filtered.append((h, h_date))
+
+    # Semanas ISO en el rango, con etiqueta "S<numero>"
+    weeks = []
+    cur = date_from - timedelta(days=date_from.weekday())  # lunes de esa semana
+    end_monday = date_to - timedelta(days=date_to.weekday())
+    hoy_monday = hoy - timedelta(days=hoy.weekday())
+    while cur <= end_monday:
+        iso_week = cur.isocalendar()[1]
+        weeks.append({
+            "label": f"S{iso_week}",
+            "start": cur, "end": cur + timedelta(days=6),
+            "is_current": cur == hoy_monday,
+        })
+        cur += timedelta(days=7)
+    if not weeks:
+        iso_week = hoy_monday.isocalendar()[1]
+        weeks = [{"label": f"S{iso_week}", "start": hoy_monday, "end": hoy_monday, "is_current": True}]
+
+    rows = []
+    for h, h_date in filtered:
+        week_idx = None
+        for i, w in enumerate(weeks):
+            if w["start"] <= h_date <= w["end"]:
+                week_idx = i
+                break
+        rows.append({
+            "area": h.get("area", ""), "description": h.get("description", ""),
+            "status": h.get("status", "Abierto"), "pillar": h.get("pillar", ""),
+            "planta_name": h.get("planta_name", ""), "pais": h.get("pais", ""),
+            "week_idx": week_idx,
+        })
+
+    return render_template(
+        "cronograma.html", weeks=weeks, rows=rows, paises=paises,
+        pais_f=pais_f, estado_f=estado_f, fase_f=fase_f,
+        date_from=date_from.isoformat(), date_to=date_to.isoformat(),
+    )
+
+
+@app.route("/catalogo")
+@login_required
+def catalogo_view():
+    pid = request.args.get("pid", "")
+    catalogo = load_catalogo()
+    grouped = {f: [] for f in FASES}
+    for real_idx, c in enumerate(catalogo):
+        fase = c.get("fase")
+        if fase in grouped:
+            grouped[fase].append((real_idx, c))
+    edit_idx = request.args.get("edit_idx", type=int)
+    edit_item = catalogo[edit_idx] if edit_idx is not None and 0 <= edit_idx < len(catalogo) else None
+    return render_template("catalogo.html", grouped=grouped, pid=pid, edit_idx=edit_idx, edit_item=edit_item)
+
+
+@app.route("/catalogo/add", methods=["POST"])
+@login_required
+def catalogo_add():
+    pid = request.form.get("pid", "")
+    fase = request.form.get("fase", FASES[0])
+    descripcion = request.form.get("descripcion", "").strip()
+    idx_raw = request.form.get("idx", "")
+    if descripcion:
+        catalogo = load_catalogo()
+        if idx_raw != "" and idx_raw.isdigit() and 0 <= int(idx_raw) < len(catalogo):
+            catalogo[int(idx_raw)] = {"fase": fase, "descripcion": descripcion}
+        else:
+            catalogo.append({"fase": fase, "descripcion": descripcion})
+        save_catalogo(catalogo)
+    return redirect(url_for("catalogo_view", pid=pid))
+
+
+@app.route("/catalogo/<int:idx>/delete", methods=["POST"])
+@login_required
+def catalogo_delete(idx):
+    pid = request.args.get("pid", "") or request.form.get("pid", "")
+    catalogo = load_catalogo()
+    if 0 <= idx < len(catalogo):
+        catalogo.pop(idx)
+        save_catalogo(catalogo)
+    return redirect(url_for("catalogo_view", pid=pid))
+
+
+# ── Catálogo global de Países y Plantas (para dropdowns en cascada) ────────
+@app.route("/paises-plantas")
+@login_required
+def paises_plantas_view():
+    pid = request.args.get("pid", "")
+    registro = load_paises_plantas()
+    edit_idx = request.args.get("edit_idx", type=int)
+    edit_item = registro[edit_idx] if edit_idx is not None and 0 <= edit_idx < len(registro) else None
+    return render_template(
+        "paises_plantas.html", registro=list(enumerate(registro)), pid=pid,
+        edit_idx=edit_idx, edit_item=edit_item,
+    )
+
+
+@app.route("/paises-plantas/add", methods=["POST"])
+@login_required
+def paises_plantas_add():
+    pid = request.form.get("pid", "")
+    pais = request.form.get("pais", "").strip()
+    planta = request.form.get("planta", "").strip()
+    areas_raw = request.form.get("areas", "").strip()
+    areas_list = [a.strip() for a in areas_raw.split(",") if a.strip()]
+    idx_raw = request.form.get("idx", "")
+    if pais and planta:
+        registro = load_paises_plantas()
+        item = {"pais": pais, "planta": planta, "areas": areas_list}
+        if idx_raw != "" and idx_raw.isdigit() and 0 <= int(idx_raw) < len(registro):
+            registro[int(idx_raw)] = item
+        else:
+            registro.append(item)
+        save_paises_plantas(registro)
+    return redirect(url_for("paises_plantas_view", pid=pid))
+
+
+@app.route("/paises-plantas/<int:idx>/delete", methods=["POST"])
+@login_required
+def paises_plantas_delete(idx):
+    pid = request.args.get("pid", "") or request.form.get("pid", "")
+    registro = load_paises_plantas()
+    if 0 <= idx < len(registro):
+        registro.pop(idx)
+        save_paises_plantas(registro)
+    return redirect(url_for("paises_plantas_view", pid=pid))
+
+
+# ── Evidencias fotográficas ────────────────────────────────────────────────
+@app.route("/planta/<pid>/evidencia")
+@login_required
+def planta_evidencia(pid):
+    _, p = get_planta_or_404(pid)
+    return render_template("planta_evidencia.html", p=p, active="Evidencias")
+
+
+@app.route("/planta/<pid>/evidencia/upload", methods=["POST"])
+@login_required
+def evidencia_upload(pid):
+    file = request.files.get("photo")
+    if not file or not file.filename:
+        return redirect(url_for("planta_evidencia", pid=pid))
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_PHOTO_EXT:
+        return redirect(url_for("planta_evidencia", pid=pid))
+
+    unique_name = f"{int(time.time()*1000)}{''.join(random.choices(string.ascii_lowercase, k=4))}.{ext}"
+    safe_name = secure_filename(unique_name)
+    blob = file.read()
+    add_evidence_db(pid, safe_name, request.form.get("caption", "").strip(), date.today().isoformat(), blob, file.mimetype)
+    return redirect(url_for("planta_evidencia", pid=pid))
+
+
+@app.route("/planta/<pid>/evidencia/photo/<filename>")
+@login_required
+def evidencia_photo(pid, filename):
+    safe_name = secure_filename(filename)
+    row = get_evidence_blob(pid, safe_name)
+    if row and row.get("photo_data"):
+        return Response(bytes(row["photo_data"]), mimetype=row.get("mime_type") or _mime_from_filename(safe_name))
+
+    legacy_path = PHOTOS_DIR / pid / safe_name
+    if legacy_path.is_file():
+        return send_from_directory(str(legacy_path.parent), safe_name)
+    abort(404)
+
+
+@app.route("/planta/<pid>/evidencia/<filename>/delete", methods=["POST"])
+@login_required
+def evidencia_delete(pid, filename):
+    safe_name = secure_filename(filename)
+    delete_evidence_db(pid, safe_name)
+    return redirect(url_for("planta_evidencia", pid=pid))
+
+
+# ── Exportar ──────────────────────────────────────────────────────────────
+@app.route("/planta/<pid>/export")
+@login_required
+def planta_export(pid):
+    _, p = get_planta_or_404(pid)
+    return render_template("planta_export.html", p=p, active="Exportar")
+
+
+@app.route("/planta/<pid>/export.zip")
+@login_required
+def planta_export_zip(pid):
+    _, p = get_planta_or_404(pid)
+    exports = {
+        "auditorias_5s.csv": (
+            ["Fecha", "Zona/Area", "Auditor"] + PILLARS + ["% General", "Clasificacion", "Observaciones"],
+            p.get("auditorias", []),
+        ),
+        "hallazgos_5s.csv": (
+            ["Fecha", "Zona/Area", "Fase", "Descripcion", "Severidad", "Accion correctiva",
+             "Responsable", "Fecha compromiso", "Estado"],
+            p.get("hallazgos", []),
+        ),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Auditorias
+        csv_buf = io.StringIO()
+        writer = csv.writer(csv_buf)
+        writer.writerow(exports["auditorias_5s.csv"][0])
+        for a in exports["auditorias_5s.csv"][1]:
+            clas = a.get("clasificacion") or clasificacion_pct(audit_avg(a))
+            row = [a.get("fecha", ""), a.get("area", ""), a.get("auditor", "")] \
+                + [a.get(f"pct_{pil}", "") for pil in PILLARS] \
+                + [audit_avg(a), clas, a.get("notes", "")]
+            writer.writerow(row)
+        zf.writestr("auditorias_5s.csv", csv_buf.getvalue())
+        # Hallazgos
+        csv_buf2 = io.StringIO()
+        writer2 = csv.writer(csv_buf2)
+        writer2.writerow(exports["hallazgos_5s.csv"][0])
+        for h in exports["hallazgos_5s.csv"][1]:
+            writer2.writerow([
+                h.get("date", ""), h.get("area", ""), h.get("pillar", ""), h.get("description", ""),
+                h.get("severity", ""), h.get("corrective_action", ""), h.get("responsible", ""),
+                h.get("due_date", ""), h.get("status", ""),
+            ])
+        zf.writestr("hallazgos_5s.csv", csv_buf2.getvalue())
+    buf.seek(0)
+    safe_name = "".join(c for c in p.get("name", "5s") if c.isalnum() or c in " _-").strip() or "5s"
+    return send_file(buf, as_attachment=True, download_name=f"{safe_name}_export.zip", mimetype="application/zip")
+
+
+def _pdf_safe(text):
+    text = str(text if text is not None else "")
+    try:
+        text.encode("latin-1")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
+def _pdf_wrap_long_words(text, max_word_len=35):
+    """fpdf2 lanza una excepcion (FPDFException) si una 'palabra' sin
+    espacios es mas ancha que la linea disponible en multi_cell. Esto pasa
+    facilmente con texto libre (ej. 'Problema / Alcance' escrito sin
+    espacios, o una URL). Insertamos espacios cada N caracteres dentro de
+    cualquier palabra demasiado larga para que siempre pueda partirse."""
+    text = _pdf_safe(text)
+    words = text.split(" ")
+    out_words = []
+    for w in words:
+        if len(w) > max_word_len:
+            chunks = [w[i:i + max_word_len] for i in range(0, len(w), max_word_len)]
+            out_words.append(" ".join(chunks))
+        else:
+            out_words.append(w)
+    return " ".join(out_words)
+
+
+def _pdf_truncate(text, max_chars):
+    text = _pdf_safe(text)
+    if len(text) > max_chars:
+        return text[: max(0, max_chars - 3)] + "..."
+    return text
+
+
+_PDF_BLUE = (20, 78, 140)
+_PDF_ORANGE = (254, 130, 0)
+_PDF_GREEN = (140, 194, 74)
+_PDF_RED = (227, 73, 72)
+_PDF_GRAY = (100, 100, 100)
+
+
+def _pdf_header(pdf, title):
+    pdf.set_fill_color(*_PDF_BLUE)
+    pdf.rect(0, 0, pdf.w, 16, "F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_xy(8, 3)
+    _pdf_safe_cell(pdf, 140, 10, "NEFAB - 5S", 0, 0, "L")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_xy(pdf.w - 110, 3)
+    _pdf_safe_cell(pdf, 102, 10, _pdf_safe(title), 0, 0, "R")
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_y(20)
+
+
+def _pdf_section_title(pdf, text):
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.set_text_color(*_PDF_BLUE)
+    _pdf_safe_cell(pdf, 0, 8, _pdf_safe(text), 0, 1)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(1)
+
+
+def _pdf_safe_cell(pdf, w, h, text, border=0, ln=0, align="", fill=False):
+    """Envoltorio a prueba de fallos sobre pdf.cell(): si fpdf2 no puede
+    renderizar el texto en el ancho disponible ('Not enough horizontal
+    space to render a single character'), en vez de tumbar todo el PDF,
+    reintenta con un texto mas corto y como ultimo recurso deja la celda
+    vacia."""
+    try:
+        pdf.cell(w, h, text, border, ln, align, fill)
+    except Exception:
+        try:
+            pdf.cell(w, h, _pdf_truncate(text, 3), border, ln, align, fill)
+        except Exception:
+            try:
+                pdf.cell(w, h, "", border, ln, align, fill)
+            except Exception:
+                pass
+
+
+def _pdf_safe_multicell(pdf, w, h, text):
+    try:
+        pdf.multi_cell(w, h, text)
+    except Exception:
+        try:
+            pdf.multi_cell(w, h, _pdf_truncate(text, 20))
+        except Exception:
+            try:
+                pdf.multi_cell(w, h, "-")
+            except Exception:
+                pdf.ln(h)
+
+
+def _pdf_table_row(pdf, cells, widths, height=7, header=False, fill=None):
+    pdf.set_font("Helvetica", "B" if header else "", 8)
+    if header:
+        pdf.set_fill_color(*_PDF_BLUE)
+        pdf.set_text_color(255, 255, 255)
+        do_fill = True
+    elif fill:
+        pdf.set_fill_color(*fill)
+        pdf.set_text_color(0, 0, 0)
+        do_fill = True
+    else:
+        pdf.set_text_color(0, 0, 0)
+        do_fill = False
+    for text, w in zip(cells, widths):
+        _pdf_safe_cell(pdf, w, height, _pdf_truncate(text, max(4, int(w / 1.7))), 1, 0, "L", do_fill)
+    pdf.ln(height)
+    pdf.set_text_color(0, 0, 0)
+
+
+def generate_pdf_report(p):
+    from fpdf import FPDF
+
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    pdf.add_page()
+    _pdf_header(pdf, "Reporte 5S")
+
+    area = p.get("area", "Logística")
+    area_color = _PDF_BLUE if area == "Logística" else _PDF_ORANGE
+    pdf.set_fill_color(*area_color)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 9)
+    _pdf_safe_cell(pdf, 35, 7, _pdf_safe(area), 0, 1, "C", True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(4)
+
+    pdf.set_font("Helvetica", "B", 16)
+    _pdf_safe_cell(pdf, 0, 10, _pdf_truncate(p.get("name", ""), 70), 0, 1)
+
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(*_PDF_GRAY)
+    _pdf_safe_cell(pdf, 0, 6, _pdf_safe(f"{p.get('customer','')}  -  {p.get('site','')}  -  {p.get('created_at','')}"), 0, 1)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(4)
+
+    _pdf_section_title(pdf, "Información de la planta")
+    info_rows = [
+        ("Sitio / Operación", p.get("site", "") or "-"),
+        ("Cliente", p.get("customer", "") or "-"),
+        ("Responsable", p.get("owner", "") or "-"),
+        ("Área", area),
+        ("Problema / Alcance", p.get("problem", "") or "-"),
+    ]
+    for label, value in info_rows:
+        pdf.set_font("Helvetica", "B", 9)
+        _pdf_safe_cell(pdf, 45, 6, _pdf_safe(label), 0, 0)
+        pdf.set_font("Helvetica", "", 9)
+        y_before = pdf.get_y()
+        _pdf_safe_multicell(pdf, 0, 6, _pdf_wrap_long_words(value))
+        pdf.set_xy(pdf.l_margin, max(pdf.get_y(), y_before + 6))
+    pdf.ln(3)
+
+    stats = planta_stats(p)
+    _pdf_section_title(pdf, "KPIs")
+    kpi_items = [
+        ("Promedio general", f"{stats['promedio']}%", _PDF_BLUE),
+        ("Auditorías", str(stats["num_auditorias"]), _PDF_GRAY),
+        ("Hallazgos abiertos", str(stats["abiertos"]), _PDF_RED),
+        ("Hallazgos cerrados", str(stats["cerrados"]), _PDF_GREEN),
+    ]
+    box_w = 42
+    x0, y0 = pdf.get_x(), pdf.get_y()
+    for i, (label, value, color) in enumerate(kpi_items):
+        x = x0 + i * (box_w + 2)
+        pdf.set_draw_color(220, 220, 220)
+        pdf.rect(x, y0, box_w, 18)
+        pdf.set_xy(x, y0 + 3)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(*color)
+        _pdf_safe_cell(pdf, box_w, 7, _pdf_safe(value), 0, 0, "C")
+        pdf.set_xy(x, y0 + 11)
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(*_PDF_GRAY)
+        _pdf_safe_cell(pdf, box_w, 5, _pdf_safe(label), 0, 0, "C")
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_y(y0 + 24)
+
+    _pdf_section_title(pdf, "Promedio por pilar")
+    for pil in PILLARS:
+        y = pdf.get_y()
+        val = stats["pilares"].get(pil, 0)
+        pdf.set_font("Helvetica", "", 9)
+        _pdf_safe_cell(pdf, 55, 6, _pdf_safe(PILLAR_LABELS.get(pil, pil)), 0, 0)
+        bar_w = max(1.0, 40.0 * (val / 100.0))
+        color = _PDF_GREEN if val >= 80 else (_PDF_ORANGE if val >= 60 else _PDF_RED)
+        pdf.set_fill_color(*color)
+        pdf.rect(pdf.get_x(), y + 1, bar_w, 4, "F")
+        pdf.set_xy(pdf.get_x() + 22, y)
+        _pdf_safe_cell(pdf, 20, 6, f"{val}%", 0, 0)
+        pdf.ln(6)
+    pdf.ln(2)
+
+    auditorias = p.get("auditorias", [])
+    if auditorias:
+        pdf.add_page(orientation="P")
+        _pdf_header(pdf, "Auditorías 5S")
+        card_w, card_h, gap = 190, 28, 4
+        for a in auditorias:
+            clas = a.get("clasificacion") or clasificacion_pct(audit_avg(a))
+            clas_color = _PDF_GREEN if clas == "Bueno" else (_PDF_ORANGE if clas == "Regular" else _PDF_RED)
+            y0 = pdf.get_y()
+            if y0 + card_h > 275:
+                pdf.add_page(orientation="P")
+                _pdf_header(pdf, "Auditorías 5S (cont.)")
+                y0 = pdf.get_y()
+
+            pdf.set_draw_color(225, 229, 235)
+            pdf.set_fill_color(250, 251, 253)
+            pdf.rect(10, y0, card_w, card_h, "DF")
+
+            # Encabezado: Área — País ................ Auditor | Fecha
+            pdf.set_xy(13, y0 + 3)
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(0, 0, 0)
+            _pdf_safe_cell(pdf, 110, 6, _pdf_truncate(f"{a.get('area','') or '-'} — {p.get('pais','') or '-'}", 42), 0, 0)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*_PDF_GRAY)
+            pdf.set_xy(123, y0 + 3)
+            _pdf_safe_cell(pdf, 64, 6, _pdf_truncate(f"Auditor: {a.get('auditor','-') or '-'} | {a.get('fecha','')}", 42), 0, 0, "R")
+            pdf.set_text_color(0, 0, 0)
+
+            # % General, grande, a la izquierda
+            pdf.set_xy(13, y0 + 11)
+            pdf.set_font("Helvetica", "B", 17)
+            pdf.set_text_color(*clas_color)
+            _pdf_safe_cell(pdf, 32, 10, f"{audit_avg(a)}%", 0, 0)
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_xy(13, y0 + 21)
+            pdf.set_text_color(*_PDF_GRAY)
+            _pdf_safe_cell(pdf, 32, 5, "General", 0, 0)
+            pdf.set_text_color(0, 0, 0)
+
+            # Los 5 pilares, en columnas
+            x = 50
+            col_w = (card_w - 40) / len(PILLARS)
+            for pil in PILLARS:
+                val = a.get(f"pct_{pil}", 0)
+                pdf.set_xy(x, y0 + 11)
+                pdf.set_font("Helvetica", "B", 11)
+                _pdf_safe_cell(pdf, col_w, 6, f"{val}%", 0, 0, "C")
+                pdf.set_xy(x, y0 + 18)
+                pdf.set_font("Helvetica", "", 7)
+                pdf.set_text_color(*_PDF_GRAY)
+                _pdf_safe_cell(pdf, col_w, 5, pil, 0, 0, "C")
+                pdf.set_text_color(0, 0, 0)
+                x += col_w
+
+            pdf.set_y(y0 + card_h + gap)
+
+    hallazgos = p.get("hallazgos", [])
+    if hallazgos:
+        pdf.add_page(orientation="L")
+        _pdf_header(pdf, "Hallazgos 5S")
+        widths = [20, 28, 20, 58, 18, 58, 28, 25]
+        headers = ["Fecha", "Zona", "Pilar", "Descripción", "Sever.", "Acción correctiva", "Responsable", "Estado"]
+        _pdf_table_row(pdf, headers, widths, header=True)
+        for i, h in enumerate(hallazgos):
+            row = [
+                h.get("date", ""), h.get("area", ""), h.get("pillar", ""), h.get("description", ""),
+                h.get("severity", ""), h.get("corrective_action", ""), h.get("responsible", ""), h.get("status", ""),
+            ]
+            _pdf_table_row(pdf, row, widths, fill=(245, 247, 250) if i % 2 else None)
+
+    evidence = p.get("evidence", [])
+    if evidence:
+        pdf.add_page(orientation="P")
+        _pdf_header(pdf, "Evidencia fotográfica")
+        x, y = 10, 22
+        col_w, col_h = 90, 70
+        for ev in evidence:
+            if x + col_w > 200:
+                x = 10
+                y += col_h + 8
+            if y + col_h > 275:
+                pdf.add_page(orientation="P")
+                _pdf_header(pdf, "Evidencia fotográfica (cont.)")
+                x, y = 10, 22
+            try:
+                blob_row = get_evidence_blob(p.get("id", ""), ev.get("filename", ""))
+                if blob_row and blob_row.get("photo_data"):
+                    suffix = Path(ev.get("filename", "photo.jpg")).suffix or ".jpg"
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+                        tf.write(bytes(blob_row["photo_data"]))
+                        tmp_name = tf.name
+                    try:
+                        pdf.image(tmp_name, x=x, y=y, w=col_w, h=col_h - 12)
+                    finally:
+                        Path(tmp_name).unlink(missing_ok=True)
+            except Exception:
+                pass
+            pdf.set_xy(x, y + col_h - 11)
+            pdf.set_font("Helvetica", "", 8)
+            _pdf_safe_multicell(pdf, col_w, 4, _pdf_wrap_long_words(_pdf_truncate(ev.get("caption", "") or "-", 60), max_word_len=18))
+            x += col_w + 10
+
+    try:
+        out = pdf.output(dest="S")
+    except TypeError:
+        out = pdf.output()
+    if isinstance(out, str):
+        out = out.encode("latin-1", errors="replace")
+    elif isinstance(out, bytearray):
+        out = bytes(out)
+    return out
+
+
+@app.route("/planta/<pid>/report.pdf")
+@login_required
+def planta_report_pdf(pid):
+    _, p = get_planta_or_404(pid)
+    try:
+        pdf_bytes = generate_pdf_report(p)
+    except ImportError:
+        return Response(
+            "Falta instalar fpdf2. En Pydroid 3: menu Pip -> busca 'fpdf2' -> instala. "
+            "En PC: pip install fpdf2",
+            status=500,
         )
-        db.commit()
-        flash(f"Usuario '{username}' creado correctamente.", "success")
-    except sqlite3.IntegrityError:
-        flash("Ya existe un usuario con ese nombre.", "error")
-
-    return redirect(url_for("admin_users"))
-
-
-@app.route("/admin/usuarios/<int:user_id>/toggle", methods=["POST"])
-@admin_required
-def admin_users_toggle(user_id):
-    db = get_db()
-    if user_id == session.get("user_id"):
-        flash("No puedes desactivar tu propia cuenta.", "error")
-        return redirect(url_for("admin_users"))
-
-    user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-    if user is None:
-        flash("Usuario no encontrado.", "error")
-        return redirect(url_for("admin_users"))
-
-    nuevo_estado = 0 if user["activo"] else 1
-    db.execute("UPDATE users SET activo = ? WHERE id = ?", (nuevo_estado, user_id))
-    db.commit()
-    flash("Usuario actualizado.", "success")
-    return redirect(url_for("admin_users"))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response(
+            "No se pudo generar el PDF de esta planta. Se registró el detalle en los "
+            "logs del servidor para revisarlo. Error: " + _pdf_safe(str(e)),
+            status=500,
+        )
+    safe_name = "".join(c for c in p.get("name", "5s") if c.isalnum() or c in " _-").strip() or "5s"
+    return send_file(
+        io.BytesIO(pdf_bytes), as_attachment=True,
+        download_name=f"{safe_name}_reporte.pdf", mimetype="application/pdf",
+    )
 
 
-# --------------------------------------------------------------------------
-# Entrypoint
-# --------------------------------------------------------------------------
-init_db()
+# ═══════════════════════════════════════════════════════════════════════
+# Inspección de Seguridad — proyecto separado de 5S. Sitios propios,
+# hallazgos con severidad/responsable/estado (igual que 5S) pero con
+# MULTIPLES fotos por hallazgo.
+# ═══════════════════════════════════════════════════════════════════════
+def seg_sitio_stats(s):
+    hallazgos = s.get("hallazgos", [])
+    estado_counts = {"Abierto": 0, "En progreso": 0, "Cerrado": 0}
+    severidad_counts = {"Alto": 0, "Medio": 0, "Bajo": 0}
+    for h in hallazgos:
+        est = h.get("status", "Abierto")
+        estado_counts[est] = estado_counts.get(est, 0) + 1
+        sev = h.get("severity", "Medio")
+        severidad_counts[sev] = severidad_counts.get(sev, 0) + 1
+    return {
+        "total": len(hallazgos),
+        "abiertos": estado_counts.get("Abierto", 0),
+        "en_progreso": estado_counts.get("En progreso", 0),
+        "cerrados": estado_counts.get("Cerrado", 0),
+        "severidad_alta": severidad_counts.get("Alto", 0),
+        "estado_counts": estado_counts,
+        "severidad_counts": severidad_counts,
+    }
+
+
+def get_seg_sitio_or_404(sid):
+    s = get_seg_sitio(sid)
+    if not s:
+        abort(404)
+    return s
+
+
+def all_seg_hallazgos_flat():
+    """Aplana los hallazgos de todos los sitios de seguridad en una sola
+    lista, con el nombre del sitio agregado, para el Cronograma."""
+    out = []
+    for s in load_seg_sitios():
+        full = get_seg_sitio(s["id"])
+        for idx, h in enumerate(full.get("hallazgos", [])):
+            item = dict(h)
+            item["sitio_id"] = s["id"]
+            item["sitio_name"] = s.get("name", "")
+            item["_idx"] = idx
+            out.append(item)
+    return out
+
+
+@app.route("/seguridad")
+@login_required
+def seg_home():
+    return redirect(url_for("seg_sitios_list"))
+
+
+@app.route("/seguridad/sitios")
+@login_required
+def seg_sitios_list():
+    sitios = load_seg_sitios()
+    total_abiertos = total_cerrados = 0
+    for s in reversed(sitios):
+        conn = get_db()
+        rows = [dict(r) for r in conn.execute(
+            "SELECT status FROM seg_hallazgos WHERE sitio_id=?", (s["id"],))]
+        conn.close()
+        s["_n_total"] = len(rows)
+        s["_n_abiertos"] = sum(1 for r in rows if r["status"] != "Cerrado")
+        total_abiertos += s["_n_abiertos"]
+        total_cerrados += sum(1 for r in rows if r["status"] == "Cerrado")
+    sitios = list(reversed(sitios))
+    return render_template("seg_sitios_list.html", sitios=sitios,
+                           total_abiertos=total_abiertos, total_cerrados=total_cerrados)
+
+
+@app.route("/seguridad/sitios/new", methods=["GET", "POST"])
+@login_required
+def seg_sitio_new():
+    if request.method == "POST":
+        sid = create_seg_sitio_db(
+            request.form.get("name", "").strip(),
+            request.form.get("site", "").strip(),
+            request.form.get("customer", "").strip(),
+            request.form.get("owner", "").strip(),
+            request.form.get("problem", "").strip(),
+        )
+        return redirect(url_for("seg_sitio_overview", sid=sid))
+    return render_template("seg_sitio_form.html", old={})
+
+
+@app.route("/seguridad/sitios/<sid>/edit", methods=["GET", "POST"])
+@login_required
+def seg_sitio_edit(sid):
+    s = get_seg_sitio_or_404(sid)
+    if request.method == "POST":
+        update_seg_sitio_db(
+            sid,
+            request.form.get("name", "").strip() or s["name"],
+            request.form.get("site", "").strip(),
+            request.form.get("customer", "").strip(),
+            request.form.get("owner", "").strip(),
+            request.form.get("problem", "").strip(),
+        )
+        return redirect(url_for("seg_sitio_overview", sid=sid))
+    return render_template("seg_sitio_form.html", old=s)
+
+
+@app.route("/seguridad/sitios/<sid>/delete", methods=["POST"])
+@login_required
+def seg_sitio_delete(sid):
+    delete_seg_sitio_db(sid)
+    return redirect(url_for("seg_sitios_list"))
+
+
+@app.route("/seguridad/sitios/<sid>")
+@login_required
+def seg_sitio_overview(sid):
+    s = get_seg_sitio_or_404(sid)
+    stats = seg_sitio_stats(s)
+    return render_template("seg_sitio_overview.html", s=s, stats=stats, active="Inicio")
+
+
+@app.route("/seguridad/sitios/<sid>/hallazgos")
+@login_required
+def seg_hallazgos_list(sid):
+    s = get_seg_sitio_or_404(sid)
+    return render_template("seg_hallazgos_list.html", s=s, active="Hallazgos")
+
+
+@app.route("/seguridad/sitios/<sid>/hallazgos/save", methods=["GET", "POST"])
+@login_required
+def seg_hallazgo_form(sid):
+    s = get_seg_sitio_or_404(sid)
+    hid = request.args.get("hid", type=int)
+    old = get_seg_hallazgo(hid) if hid else {}
+    if old is None:
+        abort(404)
+    if request.method == "POST":
+        item = {
+            "date": request.form.get("date", "").strip() or date.today().isoformat(),
+            "area": request.form.get("area", "").strip(),
+            "description": request.form.get("description", "").strip(),
+            "severity": request.form.get("severity", SEVERITIES[0]),
+            "status": request.form.get("status", FINDING_STATUSES[0]),
+            "responsible": request.form.get("responsible", "").strip(),
+            "due_date": request.form.get("due_date", "").strip(),
+        }
+        if not item["area"] or not item["description"]:
+            return render_template("seg_hallazgo_form.html", s=s, old={**old, **item}, error=True,
+                                   today=date.today().isoformat())
+        if hid:
+            update_seg_hallazgo_db(hid, item)
+            new_hid = hid
+        else:
+            new_hid = add_seg_hallazgo_db(sid, item)
+
+        files = (request.files.getlist("photos_camera") +
+                 request.files.getlist("photos_gallery") +
+                 request.files.getlist("photos"))
+        save_seg_photos(sid, new_hid, files)
+
+        return redirect(url_for("seg_hallazgos_list", sid=sid))
+    return render_template("seg_hallazgo_form.html", s=s, old=old, error=False,
+                           today=date.today().isoformat())
+
+
+@app.route("/seguridad/sitios/<sid>/hallazgos/<int:hid>/delete", methods=["POST"])
+@login_required
+def seg_hallazgo_delete(sid, hid):
+    delete_seg_hallazgo_db(hid)
+    return redirect(url_for("seg_hallazgos_list", sid=sid))
+
+
+@app.route("/seguridad/sitios/<sid>/hallazgos/<int:hid>/close", methods=["POST"])
+@login_required
+def seg_hallazgo_close(sid, hid):
+    close_seg_hallazgo_db(hid)
+    return redirect(url_for("seg_hallazgos_list", sid=sid))
+
+
+@app.route("/seguridad/sitios/<sid>/fotos/<filename>")
+@login_required
+def seg_foto(sid, filename):
+    safe_name = secure_filename(filename)
+    row = get_seg_foto_blob(sid, safe_name)
+    if row and row.get("photo_data"):
+        return Response(bytes(row["photo_data"]), mimetype=row.get("mime_type") or _mime_from_filename(safe_name))
+
+    # Compatibilidad temporal durante la migración: sirve la foto antigua
+    # directamente desde el Persistent Disk mientras aún siga conectado.
+    legacy_path = SEG_PHOTOS_DIR / sid / safe_name
+    if legacy_path.is_file():
+        return send_from_directory(str(legacy_path.parent), safe_name)
+    abort(404)
+
+
+@app.route("/seguridad/sitios/<sid>/hallazgos/<int:hid>/fotos/<int:foto_id>/delete", methods=["POST"])
+@login_required
+def seg_foto_delete(sid, hid, foto_id):
+    delete_seg_foto_db(foto_id)
+    return redirect(url_for("seg_hallazgo_form", sid=sid, hid=hid))
+
+
+@app.route("/seguridad/cronograma")
+@login_required
+def seg_cronograma_view():
+    hallazgos = all_seg_hallazgos_flat()
+    sitios_names = sorted({h.get("sitio_name", "") for h in hallazgos if h.get("sitio_name")})
+
+    sitio_f = request.args.get("sitio", "")
+    estado_f = request.args.get("estado", "")
+    severidad_f = request.args.get("severidad", "")
+    hoy = date.today()
+    date_from_s = request.args.get("date_from", "") or (hoy - timedelta(days=28)).isoformat()
+    date_to_s = request.args.get("date_to", "") or hoy.isoformat()
+
+    try:
+        date_from = datetime.strptime(date_from_s, "%Y-%m-%d").date()
+    except Exception:
+        date_from = hoy - timedelta(days=28)
+    try:
+        date_to = datetime.strptime(date_to_s, "%Y-%m-%d").date()
+    except Exception:
+        date_to = hoy
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+
+    filtered = []
+    for h in hallazgos:
+        if sitio_f and h.get("sitio_name") != sitio_f:
+            continue
+        if estado_f and h.get("status") != estado_f:
+            continue
+        if severidad_f and h.get("severity") != severidad_f:
+            continue
+        h_date_s = h.get("date", "")
+        try:
+            h_date = datetime.strptime(h_date_s, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if h_date < date_from or h_date > date_to:
+            continue
+        filtered.append((h, h_date))
+
+    weeks = []
+    cur = date_from - timedelta(days=date_from.weekday())
+    end_monday = date_to - timedelta(days=date_to.weekday())
+    hoy_monday = hoy - timedelta(days=hoy.weekday())
+    while cur <= end_monday:
+        iso_week = cur.isocalendar()[1]
+        weeks.append({
+            "label": f"S{iso_week}",
+            "start": cur, "end": cur + timedelta(days=6),
+            "is_current": cur == hoy_monday,
+        })
+        cur += timedelta(days=7)
+    if not weeks:
+        iso_week = hoy_monday.isocalendar()[1]
+        weeks = [{"label": f"S{iso_week}", "start": hoy_monday, "end": hoy_monday, "is_current": True}]
+
+    rows = []
+    for h, h_date in filtered:
+        week_idx = None
+        for i, w in enumerate(weeks):
+            if w["start"] <= h_date <= w["end"]:
+                week_idx = i
+                break
+        rows.append({
+            "area": h.get("area", ""), "description": h.get("description", ""),
+            "status": h.get("status", "Abierto"), "severity": h.get("severity", ""),
+            "sitio_name": h.get("sitio_name", ""), "sitio_id": h.get("sitio_id"),
+            "week_idx": week_idx,
+        })
+
+    return render_template(
+        "seg_cronograma.html", weeks=weeks, rows=rows, sitios_names=sitios_names,
+        sitio_f=sitio_f, estado_f=estado_f, severidad_f=severidad_f,
+        date_from=date_from.isoformat(), date_to=date_to.isoformat(),
+    )
+
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    print(f"[Diagnóstico] Carpeta de script: {Path(__file__).resolve().parent}")
+    print(f"[Diagnóstico] DATA_DIR en uso: {DATA_DIR}")
+    print(f"[Diagnóstico] PLANTAS_FILE: {PLANTAS_FILE}")
+    # host 127.0.0.1: en Pydroid 3, abre el navegador en http://127.0.0.1:5000
+    # debug=True: muestra el error real en el navegador si algo falla.
+    # use_reloader=False: el reloader automatico de Flask puede fallar en Android
+    # y tumbar el servidor tras la primera peticion, por eso lo desactivamos.
+    app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False, threaded=True)
